@@ -6,31 +6,6 @@ PLICDiff is a structure-based molecular generation model for protein pockets. It
 
 The data processing pipeline follows TargetDiff, while the model adds PLI-aware conditioning for pocket-specific ligand generation.
 
-## Repository Structure
-
-```text
-configs/
-  training.yml                         # Training configuration
-  sampling.yml                         # Sampling configuration
-datasets/
-  pl_pair_dataset.py                   # Protein-ligand pair dataset
-  pl_pair_dataset_mp.py                # Multiprocessing dataset variant
-  protein_ligand.py                    # Protein/ligand data containers
-models/
-  molopt_score_model_pli_cross_atn.py  # PLICDiff diffusion model
-  uni_transformer.py                   # Equivariant transformer backbone
-scripts/
-  train.py                             # Training entry point
-  sample_for_pocket.py                 # Pocket-based sampling
-  evaluate_diffusion.py                # Generated molecule evaluation
-  calculate_plic_similarity.py         # PLI similarity evaluation
-  extract_PLIC.py                      # PLIP-based PLI extraction
-  data_preparation/                    # CrossDocked preprocessing scripts
-utils/
-  evaluation/                          # Chemistry, docking, and distribution metrics
-PLICDiff.yml                           # Conda/micromamba environment
-```
-
 ## Environment
 
 Create the environment with micromamba or conda:
