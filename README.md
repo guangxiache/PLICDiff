@@ -6,14 +6,6 @@ PLICDiff is a structure-based molecular generation model for protein pockets. It
 
 The data processing pipeline follows TargetDiff, while the model adds PLI-aware conditioning for pocket-specific ligand generation.
 
-## Highlights
-
-- E(3)-equivariant diffusion model for 3D ligand atom coordinates and atom types.
-- Protein pocket conditioning from local pocket atoms.
-- PLIP-derived protein-ligand interaction features as additional generation conditions.
-- Classifier-free guidance for conditional molecular generation.
-- Evaluation utilities for reconstruction, stability, atom/bond distributions, QED, SA, docking score, and PLI similarity.
-
 ## Repository Structure
 
 ```text
