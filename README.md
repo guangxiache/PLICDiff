@@ -170,23 +170,4 @@ python scripts/calculate_plic_similarity.py \
 
 This computes PLIP interaction features for generated ligands, compares them with the reference ligand by cosine similarity, and saves ranked similarity outputs together with top-scoring generated SDF files.
 
-## Configuration
 
-Main configuration files:
-
-- [configs/training.yml](configs/training.yml): dataset paths, model architecture, diffusion settings, and optimization.
-- [configs/sampling.yml](configs/sampling.yml): checkpoint path and sampling settings.
-- [configs/prop/](configs/prop): property prediction configurations.
-
-## Citation
-
-If this repository is useful for your work, please cite the corresponding PLICDiff paper or project once available. The preprocessing pipeline is based on TargetDiff:
-
-```bibtex
-@article{guan2023targetdiff,
-  title={3D Equivariant Diffusion for Target-Aware Molecule Generation and Affinity Prediction},
-  author={Guan, Jiaqi and Qian, Wesley Wei and Peng, Xingang and Su, Yufeng and Peng, Jian and Ma, Jianzhu},
-  journal={arXiv preprint arXiv:2303.03543},
-  year={2023}
-}
-```
