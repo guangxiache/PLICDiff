@@ -132,7 +132,7 @@ The script saves:
 - `sdf/`: reconstructed molecules in SDF format.
 - `sample.yml`: a copy of the sampling configuration.
 
-By default, the current sampling script uses guidance scale `0.3`. You can modify the `guidance_scale` list in `scripts/sample_for_pocket.py` to sample with multiple guidance strengths.
+By default, the current sampling script uses guidance scale `1.3`. You can modify the `guidance_scale` list in `scripts/sample_for_pocket.py` to sample with multiple guidance strengths.
 
 ## Evaluation
 
