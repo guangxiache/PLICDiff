@@ -143,7 +143,7 @@ python scripts/evaluate_diffusion.py ./outputs/sample_pocket \
 To evaluate how well generated ligands preserve the reference PLI pattern:
 
 ```bash
-python scripts/calculate_plic_similarity.py \
+python scripts/calculate_pli_similarity.py \
   --row_ligand_fn ./path/to/reference_ligand.sdf \
   --ligand_dir ./outputs/sample_pocket/sdf \
   --protein_fn ./path/to/protein_or_pocket.pdb \
