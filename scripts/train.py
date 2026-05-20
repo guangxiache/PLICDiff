@@ -43,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', type=str, default='./logs_diffusion')
     parser.add_argument('--tag', type=str, default='')
     parser.add_argument('--train_report_iter', type=int, default=200)
-    parser.add_argument('--resume_train_diffusion', action='store_true', help='Whether to resume train vae')
+    parser.add_argument('--resume_train_diffusion', action='store_true', help='Whether to resume train model')
     parser.add_argument('--load_model_path', type=str) 
     args = parser.parse_args()
 
