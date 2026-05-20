@@ -92,7 +92,6 @@ python scripts/train.py \
   --config configs/training.yml \
   --device cuda \
   --logdir ./logs_diffusion \
-  --tag plicdiff
 ```
 
 Training logs, TensorBoard files, copied model code, and checkpoints are saved under `logs_diffusion/`.
@@ -125,12 +124,6 @@ python scripts/sample_for_pocket.py configs/sampling.yml \
   --device cuda:0 \
   --result_path ./outputs/sample_pocket
 ```
-
-The script saves:
-
-- `results_<guidance_scale>.pt`: generated atom coordinates, atom types, trajectories, and reconstructed molecules.
-- `sdf/`: reconstructed molecules in SDF format.
-- `sample.yml`: a copy of the sampling configuration.
 
 By default, the current sampling script uses guidance scale `1.3`. You can modify the `guidance_scale` list in `scripts/sample_for_pocket.py` to sample with multiple guidance strengths.
 
