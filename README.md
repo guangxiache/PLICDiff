@@ -146,17 +146,6 @@ python scripts/evaluate_diffusion.py ./outputs/sample_pocket \
   --sdf_path ./outputs/sample_pocket/sdf
 ```
 
-Available docking modes are:
-
-```text
-none, qvina, vina_score, vina_dock
-```
-
-The evaluation script reports molecular stability, atom stability, reconstruction success, complete molecule rate, atom type distribution, bond length distribution, QED, SA, ring statistics, and optional docking scores. Results are saved under:
-
-```text
-outputs/sample_pocket/eval_results/
-```
 
 To evaluate how well generated ligands preserve the reference PLI pattern:
 
@@ -168,6 +157,5 @@ python scripts/calculate_plic_similarity.py \
   --radius 10
 ```
 
-This computes PLIP interaction features for generated ligands, compares them with the reference ligand by cosine similarity, and saves ranked similarity outputs together with top-scoring generated SDF files.
 
 
