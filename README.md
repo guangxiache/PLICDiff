@@ -1,6 +1,6 @@
 # PLICDiff
 
-*Equivariant 3D Diffusion Model for Molecular Generation under Protein-Ligand Interaction Conditioning with Classifier-Free Guidance*
+*An Equivariant Diffusion Model for Generating Ligands with Native Protein-Ligand Interactions via Classifier-Free Guidance*
 
 PLICDiff is a structure-based molecular generation model for protein pockets. It extends equivariant 3D diffusion generation with explicit protein-ligand interaction (PLI) conditioning extracted by PLIP, and uses classifier-free guidance during sampling to control generation toward the desired interaction pattern.
 
