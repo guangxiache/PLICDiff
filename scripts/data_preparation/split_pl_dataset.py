@@ -1,5 +1,10 @@
-from math import pi
 import os
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 import argparse
 import random
 import torch
@@ -11,14 +16,11 @@ from torch.utils.data import Subset
 from datasets.pl_pair_dataset_mp import PocketLigandPairDataset
 
 
-def get_chain_name(fn):
-    return os.path.basename(fn)[:6]  
-
 def get_pdb_name(fn):
     return os.path.basename(fn)[:4]
 
 
-def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets):
+def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets, seed=2024):
     # only save first encountered id for unseen pdbs
     unique_id = []
     pdb_visited = set()
@@ -31,10 +33,11 @@ def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets):
     print('Number of Pairs: %d' % len(unique_id))
     print('Number of PDBs:  %d' % len(pdb_visited))
 
-    random.Random(args.seed).shuffle(unique_id)
+    random.Random(seed).shuffle(unique_id)
     unique_id = unique_id[:num_pockets]  
     print('Number of selected: %d' % len(unique_id))
-    return unique_id, pdb_visited.union(used_pdb)
+    selected_pdb = {get_pdb_name(dataset[idx].ligand_filename) for idx in unique_id}
+    return unique_id, selected_pdb.union(used_pdb)
 
 
 if __name__ == '__main__':
@@ -48,9 +51,15 @@ if __name__ == '__main__':
     parser.add_argument('--test_num_pockets', type=int, default=100)
     parser.add_argument('--seed', type=int, default=2024)
     parser.add_argument('--num_cpu', type=int, default=12)
-    parser.add_argument('--allowed_ids_path', type=str, default='./data/allowed_ids.pt')
-    parser.add_argument('--train_pdb_info_path', type=str, default='./data/train_pdb_info.pkl')
+    parser.add_argument('--allowed_ids_path', type=str, default=None)
+    parser.add_argument('--train_pdb_info_path', type=str, default=None)
     args = parser.parse_args()
+    dataset_path = Path(args.path).expanduser().resolve()
+    args.allowed_ids_path = args.allowed_ids_path or str(dataset_path.parent / (dataset_path.name + '_allowed_ids.pkl'))
+    args.train_pdb_info_path = args.train_pdb_info_path or str(dataset_path.parent / (
+        dataset_path.name + f'_train_pdb_{args.train}_seed{args.seed}.pkl'))
+    for output in (args.dest, args.allowed_ids_path, args.train_pdb_info_path):
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
 
     dataset = PocketLigandPairDataset(args.path, args.num_cpu)
     print('Load dataset successfully!')
@@ -77,7 +86,7 @@ if __name__ == '__main__':
             blocked_id = set().union(*[ 
                 elements[i] for i in elements.keys() if i not in allowed_elements  
             ])
-            allowed_id = list(valid_ids - blocked_id)
+            allowed_id = sorted(valid_ids - blocked_id)
             random.Random(args.seed).shuffle(allowed_id)   
             with open(args.allowed_ids_path, 'wb') as f:
                 pickle.dump(allowed_id, f)            
@@ -85,6 +94,7 @@ if __name__ == '__main__':
             with open(args.allowed_ids_path, 'rb') as f:
                 allowed_id = pickle.load(f)
         print('Allowed: %d' % len(allowed_id))
+        train_id = allowed_id[:args.train]
 
         if not os.path.exists(args.train_pdb_info_path):
             train_id = allowed_id[:args.train]  
@@ -101,16 +111,16 @@ if __name__ == '__main__':
         if args.val_num_pockets == -1:
             # not group by pocket
             val_id = allowed_id[args.train: args.train + args.val]
-            used_pdb = train_pdb
+            used_pdb = train_pdb.union({get_pdb_name(dataset[idx].ligand_filename) for idx in val_id})
         else:
             raw_val_id = allowed_id[args.train: args.train + args.val]
-            val_id, used_pdb = get_unique_pockets(dataset, raw_val_id, train_pdb, args.val_num_pockets)   
+            val_id, used_pdb = get_unique_pockets(dataset, raw_val_id, train_pdb, args.val_num_pockets, args.seed)
 
         if args.test_num_pockets == -1:
             test_id = allowed_id[args.train + args.val: args.train + args.val + args.test]
         else:
             raw_test_id = allowed_id[args.train + args.val: args.train + args.val + args.test]
-            test_id, used_pdb = get_unique_pockets(dataset, raw_test_id, used_pdb, args.test_num_pockets)
+            test_id, used_pdb = get_unique_pockets(dataset, raw_test_id, used_pdb, args.test_num_pockets, args.seed)
 
     torch.save({   
         'train': train_id,  # 200000

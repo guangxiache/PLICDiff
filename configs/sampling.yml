@@ -1,5 +1,5 @@
 model:
-  checkpoint: ./logs_diffusion/training_2025_04_10__20_16_36_train_10_cfg_pli_cross_atn_resume_train_4/checkpoints/9430000.pt
+  checkpoint: ./checkpoint/9430000.pt
 
 sample:
   seed: 2025
@@ -8,3 +8,11 @@ sample:
   pos_only: False
   center_pos_mode: protein
   sample_num_atoms: prior
+  # Null-origin CFG: f_null + g * (f_cond - f_null).
+  # For conditional-origin coefficients omega, use g = 1 + omega.
+  guidance_scale_pos: 3.0
+  guidance_scale_v: 3.0
+  # false: provide only PLI labels to the conditioning encoder.
+  # true: also provide the reference ligand structure to both CFG branches;
+  #       requires --reference_ligand and --raw_ligand_path.
+  guidance_use_reference_ligand: false

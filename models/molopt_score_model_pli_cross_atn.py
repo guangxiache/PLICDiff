@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_scatter import scatter_sum, scatter_mean
+from torch_scatter import scatter_mean
 from tqdm.auto import tqdm
 
 from models.common import compose_context, ShiftedSoftplus
@@ -98,10 +98,6 @@ def cosine_beta_schedule(timesteps, s=0.008):
     return alphas
 
 
-def get_distance(pos, edge_index):
-    return (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1)
-
-
 def to_torch_const(x):
     x = torch.from_numpy(x).float()
     x = nn.Parameter(x, requires_grad=False)
@@ -110,8 +106,7 @@ def to_torch_const(x):
 
 def center_pos(protein_pos, ligand_pos, batch_protein, batch_ligand, mode='protein'):
     if mode == 'none':
-        offset = 0.
-        pass
+        offset = protein_pos.new_zeros((int(batch_protein.max().item()) + 1, 3))
     elif mode == 'protein':
         offset = scatter_mean(protein_pos, batch_protein, dim=0)
         protein_pos = protein_pos - offset[batch_protein]
@@ -129,10 +124,6 @@ def index_to_log_onehot(x, num_classes):
     # x_onehot = x_onehot.permute(permute_order)
     log_x = torch.log(x_onehot.float().clamp(min=1e-30))
     return log_x
-
-
-def log_onehot_to_index(log_x):
-    return log_x.argmax(1)
 
 
 def categorical_kl(log_prob1, log_prob2):
@@ -338,6 +329,8 @@ class ScorePosNet3D(nn.Module):
             input_ligand_feat = init_ligand_v
 
         h_protein = self.protein_atom_emb(protein_v)
+        if pli.ndim != 2 or pli.shape[1] != 7:
+            raise ValueError('PLI must have shape (number of pocket atoms, 7).')
         if h_protein.size(0) != pli.size(0):
             pli = pli.repeat(batch_size, 1)
         assert len(pli)==len(h_protein) , 'protein atom count mismatch'
@@ -600,87 +593,31 @@ class ScorePosNet3D(nn.Module):
             'ligand_v_recon': F.softmax(pred_ligand_v, dim=-1)
         }
 
-    @torch.no_grad()
-    def likelihood_estimation(
-            self, protein_pos, protein_v, batch_protein, ligand_pos, ligand_v, batch_ligand, time_step
-    ):
-        protein_pos, ligand_pos, _ = center_pos(
-            protein_pos, ligand_pos, batch_protein, batch_ligand, mode='protein')
-        assert (time_step == self.num_timesteps).all() or (time_step < self.num_timesteps).all()
-        if (time_step == self.num_timesteps).all():
-            kl_pos_prior = self.kl_pos_prior(ligand_pos, batch_ligand)
-            log_ligand_v0 = index_to_log_onehot(batch_ligand, self.num_classes)
-            kl_v_prior = self.kl_v_prior(log_ligand_v0, batch_ligand)
-            return kl_pos_prior, kl_v_prior
-
-        # perturb pos and v
-        a = self.alphas_cumprod.index_select(0, time_step)  # (num_graphs, )
-        a_pos = a[batch_ligand].unsqueeze(-1)  # (num_ligand_atoms, 1)
-        pos_noise = torch.zeros_like(ligand_pos)
-        pos_noise.normal_()
-        # Xt = a.sqrt() * X0 + (1-a).sqrt() * eps
-        ligand_pos_perturbed = a_pos.sqrt() * ligand_pos + (1.0 - a_pos).sqrt() * pos_noise  # pos_noise * std
-        # Vt = a * V0 + (1-a) / K
-        log_ligand_v0 = index_to_log_onehot(ligand_v, self.num_classes)
-        ligand_v_perturbed, log_ligand_vt = self.q_v_sample(log_ligand_v0, time_step, batch_ligand)
-
-        preds = self(
-            protein_pos=protein_pos,
-            protein_v=protein_v,
-            batch_protein=batch_protein,
-
-            init_ligand_pos=ligand_pos_perturbed,
-            init_ligand_v=ligand_v_perturbed,
-            batch_ligand=batch_ligand,
-            time_step=time_step
-        )
-
-        pred_ligand_pos, pred_ligand_v = preds['pred_ligand_pos'], preds['pred_ligand_v']
-        if self.model_mean_type == 'C0':
-            pos_model_mean = self.q_pos_posterior(
-                x0=pred_ligand_pos, xt=ligand_pos_perturbed, t=time_step, batch=batch_ligand)
-        else:
-            raise ValueError
-
-        # atom type
-        log_ligand_v_recon = F.log_softmax(pred_ligand_v, dim=-1)
-        log_v_model_prob = self.q_v_posterior(log_ligand_v_recon, log_ligand_vt, time_step, batch_ligand)
-        log_v_true_prob = self.q_v_posterior(log_ligand_v0, log_ligand_vt, time_step, batch_ligand)
-
-        # t = [T-1, ... , 0]
-        kl_pos = self.compute_pos_Lt(pos_model_mean=pos_model_mean, x0=ligand_pos,
-                                     xt=ligand_pos_perturbed, t=time_step, batch=batch_ligand)
-        kl_v = self.compute_v_Lt(log_v_model_prob=log_v_model_prob, log_v0=log_ligand_v0,
-                                 log_v_true_prob=log_v_true_prob, t=time_step, batch=batch_ligand)
-        return kl_pos, kl_v
-
-    @torch.no_grad()
-    def fetch_embedding(self, protein_pos, protein_v, batch_protein, ligand_pos, ligand_v, batch_ligand):
-        preds = self(
-            protein_pos=protein_pos,
-            protein_v=protein_v,
-            batch_protein=batch_protein,
-
-            init_ligand_pos=ligand_pos,
-            init_ligand_v=ligand_v,
-            batch_ligand=batch_ligand,
-            fix_x=True
-        )
-        return preds
 
     @torch.no_grad()
     def sample_diffusion(self, protein_pos, protein_v, pli, batch_protein,
                          init_ligand_pos, init_ligand_v, batch_ligand, batch_raw_ligand, ligand_v_reference=None, ligand_pos_reference=None,
                          num_steps=None, center_pos_mode=None, pos_only=False,
-                         guidance_scale_pos=0, guidance_scale_v=0
+                         guidance_scale_pos=0, guidance_scale_v=0,
+                         use_reference_ligand_in_guidance=True
                          ):
 
         if num_steps is None:
             num_steps = self.num_timesteps
+        if center_pos_mode is None:
+            center_pos_mode = self.center_pos_mode
+        if not 1 <= num_steps <= self.num_timesteps:
+            raise ValueError(f'num_steps must be between 1 and {self.num_timesteps}.')
+        if use_reference_ligand_in_guidance and pli is not None:
+            if any(x is None for x in (ligand_pos_reference, ligand_v_reference, batch_raw_ligand)):
+                raise ValueError('Reference-context guidance requires reference ligand coordinates, types, and batch indices. '
+                                 'Use use_reference_ligand_in_guidance=False for PLI-profile-only sampling.')
         num_graphs = batch_protein.max().item() + 1
 
         protein_pos, init_ligand_pos, offset = center_pos(
             protein_pos, init_ligand_pos, batch_protein, batch_ligand, mode=center_pos_mode)
+        if ligand_pos_reference is not None:
+            ligand_pos_reference = ligand_pos_reference - offset[batch_raw_ligand]
 
         pos_traj, v_traj = [], []
         v0_pred_traj, vt_pred_traj = [], []
@@ -694,7 +631,8 @@ class ScorePosNet3D(nn.Module):
 
         for i in tqdm(time_seq, desc='sampling', total=len(time_seq)):
             t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=protein_pos.device)
-            if pli is None or guidance_scale_pos+guidance_scale_v == 0:
+            if pli is None or (guidance_scale_pos == 0 and guidance_scale_v == 0
+                               and not use_reference_ligand_in_guidance):
 
                 preds, _ = self(
                     protein_pos=protein_pos,
@@ -710,44 +648,80 @@ class ScorePosNet3D(nn.Module):
                     time_step=t
                 )
             else:
-                preds_cond, _ = self(
-                    protein_pos=protein_pos,
-                    protein_v=protein_v,
-                    pli=pli,
-                    batch_protein=batch_protein,
-                    ligand_v=ligand_v_reference,
-                    ligand_pos=ligand_pos_reference,
-                    init_ligand_pos=ligand_pos_sampled,
-                    init_ligand_v=ligand_v_sampled,
-                    batch_ligand=batch_ligand,
-                    batch_raw_ligand=batch_raw_ligand,
-                    time_step=t
-                )
+                if use_reference_ligand_in_guidance:
+                    # 模式一（历史行为，泄露对照）：两个分支均接收参考配体。对应训练组合
+                    # (配体 encoder 路径, 真实 pli) 42% / (配体 encoder 路径, none) 18%。
+                    # cond-uncond 之差虽只来自 pli 标签，但两个分支的绝对预测都受参考配体
+                    # 影响（生成物贴近参考配体）——作为论文中的泄露对照组保留。
+                    preds_cond, _ = self(
+                        protein_pos=protein_pos,
+                        protein_v=protein_v,
+                        pli=pli,
+                        batch_protein=batch_protein,
+                        ligand_v=ligand_v_reference,
+                        ligand_pos=ligand_pos_reference,
+                        init_ligand_pos=ligand_pos_sampled,
+                        init_ligand_v=ligand_v_sampled,
+                        batch_ligand=batch_ligand,
+                        batch_raw_ligand=batch_raw_ligand,
+                        time_step=t
+                    )
 
-                preds_uncond, _ = self(
-                    protein_pos=protein_pos,
-                    protein_v=protein_v,
-                    pli=pli_uncond,
-                    batch_protein=batch_protein,
-                    ligand_v=ligand_v_reference,
-                    ligand_pos=ligand_pos_reference,
-                    init_ligand_pos=ligand_pos_sampled,
-                    init_ligand_v=ligand_v_sampled,
-                    batch_ligand=batch_ligand,
-                    batch_raw_ligand=batch_raw_ligand,
-                    time_step=t
-                )
+                    preds_uncond, _ = self(
+                        protein_pos=protein_pos,
+                        protein_v=protein_v,
+                        pli=pli_uncond,
+                        batch_protein=batch_protein,
+                        ligand_v=ligand_v_reference,
+                        ligand_pos=ligand_pos_reference,
+                        init_ligand_pos=ligand_pos_sampled,
+                        init_ligand_v=ligand_v_sampled,
+                        batch_ligand=batch_ligand,
+                        batch_raw_ligand=batch_raw_ligand,
+                        time_step=t
+                    )
+                else:
+                    # 模式二（无泄露，论文主线）：两个分支都不喂参考配体。encoder 走
+                    # lig_coords=None 的 pocket-only 路径 —— 训练时 prob_if=0.6 使该路径
+                    # 以 40% 概率被采样（get_diffusion_loss 传 batch_raw_ligand=None、
+                    # lig_coords=x_0 但 pocket-only 分支不使用 H_lig），其中
+                    # (pocket-only, 真实 pli) 28% / (pocket-only, none) 12% 均在训练分布内，
+                    # 因此无需重训。cond-uncond 完全由 7 维 pli 标签决定。
+                    preds_cond, _ = self(
+                        protein_pos=protein_pos,
+                        protein_v=protein_v,
+                        pli=pli,
+                        batch_protein=batch_protein,
+                        ligand_v=None,
+                        ligand_pos=None,
+                        init_ligand_pos=ligand_pos_sampled,
+                        init_ligand_v=ligand_v_sampled,
+                        batch_ligand=batch_ligand,
+                        batch_raw_ligand=None,
+                        time_step=t
+                    )
+
+                    preds_uncond, _ = self(
+                        protein_pos=protein_pos,
+                        protein_v=protein_v,
+                        pli=pli_uncond,
+                        batch_protein=batch_protein,
+                        ligand_v=None,
+                        ligand_pos=None,
+                        init_ligand_pos=ligand_pos_sampled,
+                        init_ligand_v=ligand_v_sampled,
+                        batch_ligand=batch_ligand,
+                        batch_raw_ligand=None,
+                        time_step=t
+                    )
                 # Note: init_ligand_pos and init_ligand_v should not be confused
-                # preds = {
-                #     'pred_ligand_pos': preds_uncond['pred_ligand_pos'] + guidance_scale_pos * (
-                #         preds_cond['pred_ligand_pos'] - preds_uncond['pred_ligand_pos']),
-                #     'pred_ligand_v': preds_uncond['pred_ligand_v'] + guidance_scale_v * (
-                #         preds_cond['pred_ligand_v'] - preds_uncond['pred_ligand_v'])
-                # }
+                # 标准 classifier-free guidance:  preds = uncond + w * (cond - uncond)
+                # 2026-10-03 由旧式 preds = cond + w * (cond - uncond) 恢复为标准式。
+                # 旧式换算: w_standard = 1 + w_old  (旧 0.3 ≡ 标准 1.3, 旧 2.0 ≡ 标准 3.0)
                 preds = {
-                    'pred_ligand_pos': preds_cond['pred_ligand_pos'] + guidance_scale_pos * (
+                    'pred_ligand_pos': preds_uncond['pred_ligand_pos'] + guidance_scale_pos * (
                         preds_cond['pred_ligand_pos'] - preds_uncond['pred_ligand_pos']),
-                    'pred_ligand_v': preds_cond['pred_ligand_v'] + guidance_scale_v * (
+                    'pred_ligand_v': preds_uncond['pred_ligand_v'] + guidance_scale_v * (
                         preds_cond['pred_ligand_v'] - preds_uncond['pred_ligand_v'])
                 }
 

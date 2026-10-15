@@ -1,0 +1,56 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local editor files
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+.codex
+.DS_Store
+
+# Runtime outputs
+logs_diffusion/
+outputs/
+samples/
+results/
+tmp/
+
+# Datasets and generated preprocessing artifacts
+data/
+datasets/data/
+*.lmdb
+*.lmdb-lock
+*.pkl
+*.pkl.gz
+!utils/evaluation/fpscores.pkl.gz
+
+# Model checkpoints and large tensor files
+checkpoint/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Local scratch copies
+README copy.md
+
+# Local paper, analysis and release-preparation material
+/paper_revision_*/
+/code_release_review_*/
+/github_release_*/
+/文章图表数据/
+*.docx
+*.odt
+*.sdf
+*.mol2
+*.pdb
+*_similarity_output/
+AutoDockTools_py3-master/

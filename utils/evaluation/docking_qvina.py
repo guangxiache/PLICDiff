@@ -2,11 +2,13 @@ import os
 import subprocess
 import random
 import string
+import shlex
 from easydict import EasyDict
 from rdkit import Chem
 from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 
 from utils.reconstruct import reconstruct_from_generated
+from utils.evaluation.executables import find_executable, receptor_preparation_command
 
 
 def get_random_id(length=30):
@@ -53,22 +55,6 @@ class BaseDockingTask(object):
 
 class QVinaDockingTask(BaseDockingTask):
 
-    @classmethod
-    def from_generated_data(cls, data, protein_root='./data/crossdocked', **kwargs):
-        # load original pdb
-        protein_fn = os.path.join(
-            os.path.dirname(data.ligand_filename),
-            os.path.basename(data.ligand_filename)[:10] + '.pdb'  # PDBId_Chain_rec.pdb
-        )
-        protein_path = os.path.join(protein_root, protein_fn)
-        with open(protein_path, 'r') as f:
-            pdb_block = f.read()
-        xyz = data.ligand_pos.clone().cpu().tolist()
-        atomic_nums = data.ligand_element.clone().cpu().tolist()
-        # print('atomic nums: ', atomic_nums)
-        ligand_rdmol = reconstruct_from_generated(xyz, atomic_nums)
-        # print('smiles: ', Chem.MolToSmiles(ligand_rdmol))
-        return cls(pdb_block, ligand_rdmol, **kwargs)
 
     @classmethod
     def from_generated_mol(cls, ligand_rdmol, ligand_filename, protein_root='./data/crossdocked', **kwargs):
@@ -97,7 +83,7 @@ class QVinaDockingTask(BaseDockingTask):
         ligand_rdmol = next(iter(Chem.SDMolSupplier(ligand_path)))
         return cls(pdb_block, ligand_rdmol, **kwargs)
 
-    def __init__(self, pdb_block, ligand_rdmol, conda_env='adt', tmp_dir='./tmp', use_uff=True, center=None,
+    def __init__(self, pdb_block, ligand_rdmol, conda_env=None, tmp_dir='./tmp', use_uff=True, center=None,
                  size_factor=1.):
         super().__init__(pdb_block, ligand_rdmol)
         self.conda_env = conda_env
@@ -141,15 +127,17 @@ class QVinaDockingTask(BaseDockingTask):
         self.docked_sdf_path = None
 
     def run(self, exhaustiveness=16):
+        preparer = shlex.join(receptor_preparation_command())
+        obabel = shlex.quote(find_executable('obabel'))
+        qvina = shlex.quote(find_executable('qvina2', 'PLICDIFF_QVINA', alternatives=('qvina2.1',)))
         commands = """
-eval "$(conda shell.bash hook)"
-conda activate {env}
+set -e
 cd {tmp}
 # Prepare receptor (PDB->PDBQT)
-prepare_receptor4.py -r {receptor_id}.pdb
+{preparer} -r {receptor_id}.pdb
 # Prepare ligand
-obabel {ligand_id}.sdf -O{ligand_id}.pdbqt
-qvina2 \
+{obabel} {ligand_id}.sdf -O{ligand_id}.pdbqt
+{qvina} \
     --receptor {receptor_id}.pdbqt \
     --ligand {ligand_id}.pdbqt \
     --center_x {center_x:.4f} \
@@ -157,12 +145,14 @@ qvina2 \
     --center_z {center_z:.4f} \
     --size_x {size_x} --size_y {size_y} --size_z {size_z} \
     --exhaustiveness {exhaust}
-obabel {ligand_id}_out.pdbqt -O{ligand_id}_out.sdf -h
+{obabel} {ligand_id}_out.pdbqt -O{ligand_id}_out.sdf -h
         """.format(
             receptor_id=self.receptor_id,
             ligand_id=self.ligand_id,
-            env=self.conda_env,
-            tmp=self.tmp_dir,
+            preparer=preparer,
+            obabel=obabel,
+            qvina=qvina,
+            tmp=shlex.quote(self.tmp_dir),
             exhaust=exhaustiveness,
             center_x=self.center[0],
             center_y=self.center[1],
@@ -184,16 +174,23 @@ obabel {ligand_id}_out.pdbqt -O{ligand_id}_out.sdf -h
 
         self.proc.stdin.write(commands.encode('utf-8'))
         self.proc.stdin.close()
+        self.proc.stdin = None
 
         # return commands
 
-    def run_sync(self):
-        self.run()
-        while self.get_results() is None:
-            pass
-        results = self.get_results()
-        print('Best affinity:', results[0]['affinity'])
-        return results
+    def run_sync(self, exhaustiveness=16):
+        self.run(exhaustiveness=exhaustiveness)
+        # Drain both pipes while waiting; a busy poll can spin a CPU and deadlock
+        # when an external program fills its stdout/stderr pipe.
+        stdout, stderr = self.proc.communicate()
+        self.output = stdout.splitlines()
+        self.error_output = stderr.splitlines()
+        if self.proc.returncode:
+            raise RuntimeError(f'QVina preparation/docking failed: {stderr.decode(errors="replace")[-2000:]}')
+        self.results = parse_qvina_outputs(self.docked_sdf_path)
+        if not self.results:
+            raise RuntimeError('QVina did not produce a valid docked pose.')
+        return self.results
 
     def get_results(self):
         if self.proc is None:  # Not started

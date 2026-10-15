@@ -1,4 +1,10 @@
 import argparse
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 import os
 import torch
 from tqdm.auto import tqdm
@@ -7,7 +13,9 @@ from utils.evaluation.docking_vina import VinaDockingTask
 import multiprocessing as mp
 
 
-def dock_pocket_samples(pocket_samples):
+def dock_pocket_samples(pocket_samples, args):
+    if not pocket_samples:
+        return []
     ligand_fn = pocket_samples[0]['ligand_filename']
     print('Start docking pocket: %s' % ligand_fn)
     pocket_results = []
@@ -26,6 +34,8 @@ def dock_pocket_samples(pocket_samples):
                     'score_only': score_only_results,
                     'minimize': minimize_results
                 }
+            elif args.docking_mode == 'none':
+                vina_results = None
             else:
                 raise ValueError
         except:
@@ -47,9 +57,9 @@ if __name__ == '__main__':
                         choices=['none', 'qvina', 'vina_score'])
     args = parser.parse_args()
 
-    samples = torch.load(args.sample_path)
+    samples = torch.load(args.sample_path, map_location='cpu', weights_only=False)
     with mp.Pool(args.num_processes) as p:
-        docked_samples = p.map(dock_pocket_samples, samples)
+        docked_samples = p.starmap(dock_pocket_samples, [(s, args) for s in samples])
     if args.out is None:
         dir_name = os.path.dirname(args.sample_path)
         baseline_name = os.path.basename(args.sample_path).split('_')[0]

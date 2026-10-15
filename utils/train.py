@@ -30,19 +30,6 @@ class ExponentialLR_with_minLr(torch.optim.lr_scheduler.ExponentialLR):
                 for base_lr in self.base_lrs]
 
 
-def repeat_data(data: Data, num_repeat) -> Batch:
-    datas = [copy.deepcopy(data) for i in range(num_repeat)]
-    return Batch.from_data_list(datas)
-
-
-def repeat_batch(batch: Batch, num_repeat) -> Batch:
-    datas = batch.to_data_list()
-    new_data = []
-    for i in range(num_repeat):
-        new_data += copy.deepcopy(datas)
-    return Batch.from_data_list(new_data)
-
-
 def inf_iterator(iterable):
     iterator = iterable.__iter__()
     while True:

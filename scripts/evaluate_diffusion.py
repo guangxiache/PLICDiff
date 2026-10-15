@@ -1,5 +1,9 @@
 import sys
-sys.path.append('/home/swhuang/DL_code/PlicDiff_3_clip')
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 import argparse
 import os
@@ -11,11 +15,14 @@ import torch
 from tqdm.auto import tqdm
 from glob import glob
 from collections import Counter
+import matplotlib
+
+# Evaluation writes image files and must not wait for a display/GUI connection.
+matplotlib.use('Agg')
 
 from utils.evaluation import eval_atom_type, scoring_func, analyze, eval_bond_length
 from utils import misc, reconstruct, transforms
-from utils.evaluation.docking_qvina import QVinaDockingTask
-from utils.evaluation.docking_vina import VinaDockingTask
+from utils.runtime import parse_bool
 
 
 def print_dict(d, logger):
@@ -37,36 +44,36 @@ def print_ring_ratio(all_ring_sizes, logger):
         else:
             logger.info(f'ring size: {ring_size} ratio: {n_mol / len(all_ring_sizes):.3f}')
 
-def get_ligand_filename(idx, sdf_dir_path):
-    idx_str = f"_{idx}.sdf"
-    matched_files_list = []
-    for filename in os.listdir(sdf_dir_path):
-        if filename.endswith(idx_str):
-            full_path = os.path.join(sdf_dir_path, filename)
-            matched_files_list.append(full_path)
-    return matched_files_list
-
 
 def extract_idx_from_path(path):
     filename = os.path.basename(path)
     idx = filename.split('_')[-1].split('.pt')[0]
-    return float(idx)
-
+    return filename[:-3].removeprefix('results_').removeprefix('result_')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('sample_path', type=str)
-    parser.add_argument('--verbose', type=eval, default=False)
+    parser.add_argument('--verbose', type=parse_bool, default=False)
     parser.add_argument('--eval_step', type=int, default=-1)
     parser.add_argument('--eval_num_examples', type=int, default=None)
-    parser.add_argument('--save', type=eval, default=True)
-    parser.add_argument('--protein_root', type=str, default='PlicDiff/data_processed/data_processed_crossdock/crossdocked_v1.1_rmsd1.0')
+    parser.add_argument('--save', type=parse_bool, default=True)
+    parser.add_argument('--protein_root', type=str, default=None,
+                        help='Protein PDB for Vina, or protein dataset root for QVina.')
     parser.add_argument('--atom_enc_mode', type=str, default='add_aromatic')
-    parser.add_argument('--docking_mode', type=str, choices=['qvina', 'vina_score', 'vina_dock', 'none'])
+    parser.add_argument('--docking_mode', type=str, default='none', choices=['qvina', 'vina_score', 'vina_dock', 'none'])
     parser.add_argument('--exhaustiveness', type=int, default=16)
+    parser.add_argument('--docking_cpu', type=int, default=1)
     parser.add_argument('--sdf_path',type=str, default='')
     args = parser.parse_args()
+    if args.docking_cpu < 1:
+        parser.error('--docking_cpu must be positive')
+    if args.docking_mode == 'qvina':
+        from utils.evaluation.docking_qvina import QVinaDockingTask
+    elif args.docking_mode in {'vina_score', 'vina_dock'}:
+        from utils.evaluation.docking_vina import VinaDockingTask
+    if args.docking_mode != 'none' and not args.protein_root:
+        parser.error('Docking requires --protein_root (protein PDB for Vina, dataset root for QVina).')
 
     result_path = os.path.join(args.sample_path, 'eval_results')
     os.makedirs(result_path, exist_ok=True)
@@ -75,11 +82,13 @@ if __name__ == '__main__':
         RDLogger.DisableLog('rdApp.*')
 
     # Load generated data
-    results_fn_list = glob(os.path.join(args.sample_path, '*.pt'))
-    results_fn_list = sorted(results_fn_list, key=lambda x: float(os.path.basename(x)[:-3].split('_')[-1]))
+    results_fn_list = sorted(set(glob(os.path.join(args.sample_path, 'results_*.pt')) +
+                                 glob(os.path.join(args.sample_path, 'result_*.pt'))))
     if args.eval_num_examples is not None:
         results_fn_list = results_fn_list[:args.eval_num_examples]
     num_examples = len(results_fn_list)
+    if not num_examples:
+        raise FileNotFoundError('No results_*.pt or result_*.pt sampling outputs found.')
     logger.info(f'Load generated data done! {num_examples} examples in total.')
 
 
@@ -92,10 +101,13 @@ if __name__ == '__main__':
         all_atom_types = Counter()
         success_pair_dist, success_atom_types = [], Counter()
 
-        r = torch.load(r_name)  # ['data', 'pred_ligand_pos', 'pred_ligand_v', 'pred_ligand_pos_traj', 'pred_ligand_v_traj']
+        r = torch.load(r_name, map_location='cpu', weights_only=False)
         all_pred_ligand_pos = r['pred_ligand_pos_traj']  # [num_samples, num_steps, num_atoms, 3]
         all_pred_ligand_v = r['pred_ligand_v_traj']
         num_samples += len(all_pred_ligand_pos)
+        if not num_samples:
+            logger.warning('Skipping empty sampling output: %s', r_name)
+            continue
 
         idx = extract_idx_from_path(r_name)
         for sample_idx, (pred_pos, pred_v) in enumerate(zip(all_pred_ligand_pos, all_pred_ligand_v)):
@@ -130,7 +142,7 @@ if __name__ == '__main__':
             # chemical and docking check
             try:
                 chem_results = scoring_func.get_chem(mol)
-                ligand_filename = os.path.join(args.sdf_path, f'{sample_idx}_{idx}.sdf')
+                ligand_filename = os.path.join(args.sdf_path, f'{sample_idx:03d}_{idx}.sdf')
                 if args.docking_mode == 'qvina':
                     vina_task = QVinaDockingTask.from_generated_mol(
                         mol, r['data'].ligand_filename, protein_root=args.protein_root)
@@ -141,14 +153,14 @@ if __name__ == '__main__':
                     vina_task = VinaDockingTask.from_generated_mol(
                         mol, ligand_filename, protein_root=args.protein_root)
 
-                    score_only_results = vina_task.run(mode='score_only', exhaustiveness=args.exhaustiveness)
-                    minimize_results = vina_task.run(mode='minimize', exhaustiveness=args.exhaustiveness)
+                    score_only_results = vina_task.run(mode='score_only', exhaustiveness=args.exhaustiveness, cpu=args.docking_cpu)
+                    minimize_results = vina_task.run(mode='minimize', exhaustiveness=args.exhaustiveness, cpu=args.docking_cpu)
                     vina_results = {
                         'score_only': score_only_results,
                         'minimize': minimize_results
                     }
                     if args.docking_mode == 'vina_dock':
-                        docking_results = vina_task.run(mode='dock', exhaustiveness=args.exhaustiveness)
+                        docking_results = vina_task.run(mode='dock', exhaustiveness=args.exhaustiveness, cpu=args.docking_cpu)
                         vina_results['dock'] = docking_results
                 else:
                     vina_results = None
@@ -156,7 +168,7 @@ if __name__ == '__main__':
                 n_eval_success += 1
             except Exception as e:
                 if args.verbose:
-                    logger.warning('Evaluation failed for %s' % f'{example_idx}_{sample_idx}',str(e))
+                    logger.warning('Evaluation failed for %s: %s', f'{example_idx}_{sample_idx}', str(e))
                 continue
 
             # now we only consider complete molecules as success
@@ -180,7 +192,7 @@ if __name__ == '__main__':
         logger.info(f'Evaluate done! {num_samples} samples in total.')
 
         fraction_mol_stable = all_mol_stable / num_samples
-        fraction_atm_stable = all_atom_stable / all_n_atom
+        fraction_atm_stable = all_atom_stable / all_n_atom if all_n_atom else 0.0
         fraction_recon = n_recon_success / num_samples
         fraction_eval = n_eval_success / num_samples
         fraction_complete = n_complete / num_samples
@@ -213,7 +225,7 @@ if __name__ == '__main__':
         if args.save:
             eval_bond_length.plot_distance_hist(success_pair_length_profile,
                                                 metrics=success_js_metrics,
-                                                save_path=os.path.join(result_path, f'pair_dist_hist_{args.eval_step}.png'))
+                                                save_path=os.path.join(result_path, f'pair_dist_hist_{args.eval_step}_{idx}.png'))
 
         logger.info('Number of reconstructed mols: %d, complete mols: %d, evaluated mols: %d' % (
             n_recon_success, n_complete, len(results)))

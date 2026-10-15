@@ -1,17 +1,19 @@
 from openbabel import pybel
 from meeko import MoleculePreparation
-from meeko import obutils
+import meeko
 from vina import Vina
 import subprocess
 import rdkit.Chem as Chem
 from rdkit.Chem import AllChem
 import tempfile
-import AutoDockTools
 import os
 import contextlib
+import sys
+from pathlib import Path
 
 from utils.reconstruct import reconstruct_from_generated
 from utils.evaluation.docking_qvina import get_random_id, BaseDockingTask
+from utils.evaluation.executables import receptor_preparation_command
 
 
 def supress_stdout(func):
@@ -33,24 +35,33 @@ class PrepLig(object):
         
     def addH(self, polaronly=False, correctforph=True, PH=7): 
         self.ob_mol.OBMol.AddHydrogens(polaronly, correctforph, PH)
-        obutils.writeMolecule(self.ob_mol.OBMol, 'tmp_h.sdf')
 
     def gen_conf(self):
         sdf_block = self.ob_mol.write('sdf')
         rdkit_mol = Chem.MolFromMolBlock(sdf_block, removeHs=False)
         AllChem.EmbedMolecule(rdkit_mol, Chem.rdDistGeom.ETKDGv3())
         self.ob_mol = pybel.readstring('sdf', Chem.MolToMolBlock(rdkit_mol))
-        obutils.writeMolecule(self.ob_mol.OBMol, 'conf_h.sdf')
 
     @supress_stdout
     def get_pdbqt(self, lig_pdbqt=None):
         preparator = MoleculePreparation()
-        preparator.prepare(self.ob_mol.OBMol)
+        if hasattr(meeko, 'PDBQTWriterLegacy'):
+            rdmol = Chem.MolFromMolBlock(self.ob_mol.write('sdf'), removeHs=False)
+            if rdmol is None:
+                raise ValueError('Cannot parse ligand for Meeko preparation.')
+            rdmol = Chem.AddHs(rdmol, addCoords=True)
+            setups = preparator.prepare(rdmol)
+            pdbqt, ok, error = meeko.PDBQTWriterLegacy.write_string(setups[0])
+            if not ok:
+                raise ValueError(error)
+        else:
+            preparator.prepare(self.ob_mol.OBMol)
+            pdbqt = preparator.write_pdbqt_string()
         if lig_pdbqt is not None: 
-            preparator.write_pdbqt_file(lig_pdbqt)
+            Path(lig_pdbqt).write_text(pdbqt)
             return 
         else: 
-            return preparator.write_pdbqt_string()
+            return pdbqt
         
 
 class PrepProt(object): 
@@ -71,17 +82,18 @@ class PrepProt(object):
         # subprocess.Popen(['pdb2pqr30','--ff=AMBER',self.prot, self.prot_pqr],
         #                  stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL).communicate()
         subprocess.run([
-                        'python', '-m', 'pdb2pqr',
+                        sys.executable, '-m', 'pdb2pqr',
                         '--ff=AMBER',
                         self.prot,
                         self.prot_pqr
-                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        ], check=True, capture_output=True, text=True)
 
 
     def get_pdbqt(self, prot_pdbqt):
-        prepare_receptor = os.path.join(AutoDockTools.__path__[0], 'Utilities24/prepare_receptor4.py')
-        subprocess.Popen(['python3', prepare_receptor, '-r', self.prot_pqr, '-o', prot_pdbqt],
-                         stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL).communicate()
+        subprocess.run(receptor_preparation_command() + ['-r', self.prot_pqr, '-o', prot_pdbqt],
+                       check=True, capture_output=True, text=True)
+        if not Path(prot_pdbqt).is_file() or not Path(prot_pdbqt).stat().st_size:
+            raise RuntimeError('Receptor preparation did not produce a PDBQT file.')
 
 
 class VinaDock(object): 
@@ -91,10 +103,10 @@ class VinaDock(object):
     
     def _max_min_pdb(self, pdb, buffer):
         with open(pdb, 'r') as f: 
-            lines = [l for l in f.readlines() if l.startswith('ATOM') or l.startswith('HEATATM')]
-            xs = [float(l[31:39]) for l in lines]
-            ys = [float(l[39:47]) for l in lines]
-            zs = [float(l[47:55]) for l in lines]
+            lines = [l for l in f.readlines() if l.startswith('ATOM') or l.startswith('HETATM')]
+            xs = [float(l[30:38]) for l in lines]
+            ys = [float(l[38:46]) for l in lines]
+            zs = [float(l[46:54]) for l in lines]
             print(max(xs), min(xs))
             print(max(ys), min(ys))
             print(max(zs), min(zs))
@@ -153,16 +165,6 @@ class VinaDock(object):
 
 class VinaDockingTask(BaseDockingTask):
 
-    @classmethod
-    def from_generated_data(cls, data, protein_root='./data/crossdocked', **kwargs):
-        # load original pdb
-        protein_fn = os.path.join(
-            os.path.dirname(data.ligand_filename),
-            os.path.basename(data.ligand_filename)[:10] + '.pdb'  # PDBId_Chain_rec.pdb
-        )
-        protein_path = os.path.join(protein_root, protein_fn)
-        ligand_rdmol = reconstruct_from_generated(data.clone())
-        return cls(protein_path, ligand_rdmol, **kwargs)
 
     @classmethod
     def from_original_data(cls, data, ligand_root='./data/crossdocked_pocket10', protein_root='./data/crossdocked',
@@ -185,7 +187,12 @@ class VinaDockingTask(BaseDockingTask):
         #     os.path.basename(ligand_filename)[:10] + '.pdb'  # PDBId_Chain_rec.pdb
         # )
         # protein_path = os.path.join(protein_root, protein_fn)
-        protein_path = protein_root
+        if Path(protein_root).is_dir():
+            protein_fn = os.path.join(os.path.dirname(ligand_filename),
+                                      os.path.basename(ligand_filename)[:10] + '.pdb')
+            protein_path = os.path.join(protein_root, protein_fn)
+        else:
+            protein_path = protein_root
 
         return cls(protein_path, ligand_rdmol, **kwargs)
 
@@ -201,6 +208,8 @@ class VinaDockingTask(BaseDockingTask):
         self.ligand_id = self.task_id + '_ligand'
 
         self.receptor_path = protein_path
+        if not Path(protein_path).is_file():
+            raise FileNotFoundError(f'Protein PDB/PDBQT not found: {protein_path}')
         self.ligand_path = os.path.join(self.tmp_dir, self.ligand_id + '.sdf')
 
         self.recon_ligand_mol = ligand_rdmol
@@ -230,17 +239,20 @@ class VinaDockingTask(BaseDockingTask):
 
     def run(self, mode='dock', exhaustiveness=8, **kwargs):
         ligand_pdbqt = self.ligand_path[:-4] + '.pdbqt'
-        protein_pqr = self.receptor_path[:-4] + '.pqr'
-        protein_pdbqt = self.receptor_path[:-4] + '.pdbqt'
+        protein_pqr = os.path.join(self.tmp_dir, self.receptor_id + '.pqr')
+        protein_pdbqt = os.path.join(self.tmp_dir, self.receptor_id + '.pdbqt')
 
         lig = PrepLig(self.ligand_path, 'sdf')
         lig.get_pdbqt(ligand_pdbqt)
 
-        prot = PrepProt(self.receptor_path)
-        if not os.path.exists(protein_pqr):
-            prot.addH(protein_pqr)
-        if not os.path.exists(protein_pdbqt):
-            prot.get_pdbqt(protein_pdbqt)
+        if self.receptor_path.lower().endswith('.pdbqt'):
+            protein_pdbqt = self.receptor_path
+        else:
+            prot = PrepProt(self.receptor_path)
+            if not os.path.exists(protein_pqr):
+                prot.addH(protein_pqr)
+            if not os.path.exists(protein_pdbqt):
+                prot.get_pdbqt(protein_pdbqt)
 
         dock = VinaDock(ligand_pdbqt, protein_pdbqt)
         dock.pocket_center, dock.box_size = self.center, [self.size_x, self.size_y, self.size_z]
@@ -271,4 +283,3 @@ class VinaDockingTask(BaseDockingTask):
 #     dock.get_box()
 #     dock.dock()
     
-

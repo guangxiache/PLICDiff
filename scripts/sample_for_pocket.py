@@ -1,9 +1,16 @@
 import sys
-sys.path.append('/home/swhuang/DL_code/PlicDiff_3_clip')
 import argparse
 import os
 import shutil
+import math
+import json
+from pathlib import Path
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+import numpy as np
 import torch
 from torch_geometric.transforms import Compose
 
@@ -15,7 +22,8 @@ from scripts.sample_diffusion import sample_diffusion_ligand
 from utils.data import PDBProtein, parse_sdf_file
 from utils import reconstruct
 from rdkit import Chem
-from extract_PLIC import PLIC 
+from datasets.extract_PLIC import PLIC
+from utils.runtime import load_checkpoint, project_path, validate_device
 
 
 def pdb_to_pocket_data(pdb_path):
@@ -44,24 +52,45 @@ def raw_ligand_data(raw_ligand_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config', type=str)
-    parser.add_argument('--pdb_path', type=str)
+    parser.add_argument('--pdb_path', type=str, required=True)
     parser.add_argument('--device', type=str, default='cuda:0')
     parser.add_argument('--batch_size', type=int, default=10)
-    parser.add_argument('--result_path', type=str, default='./7ama_DC_853_gen_gs_0point3')
+    parser.add_argument('--result_path', type=str, default='./outputs/sample_pocket')
+    parser.add_argument('--checkpoint', type=str)
+    parser.add_argument('--num_steps', type=int)
+    parser.add_argument('--guidance_scale', type=float, nargs='+',
+                        help='Shared null-origin CFG coefficient(s); overrides the configuration.')
+    parser.add_argument('--guidance_scale_pos', type=float)
+    parser.add_argument('--guidance_scale_v', type=float)
     parser.add_argument('--num_samples', type=int)
     parser.add_argument('--reference_ligand', action='store_true')
     parser.add_argument('--raw_ligand_path', type=str)
+    parser.add_argument('--pli_path', type=str, help='de novo 模式：直接加载相互作用 profile (.npy, shape=(口袋原子数,7))，不给参考配体')
     args = parser.parse_args()
+    args.device = validate_device(args.device)
+    args.config = project_path(args.config)
+    if not Path(args.pdb_path).is_file():
+        parser.error('--pdb_path must name a protein/pocket PDB file')
+    if args.reference_ligand and (not args.raw_ligand_path or not Path(args.raw_ligand_path).is_file()):
+        parser.error('--reference_ligand requires an existing --raw_ligand_path')
+    if args.guidance_scale is not None and (args.guidance_scale_pos is not None or args.guidance_scale_v is not None):
+        parser.error('Use --guidance_scale or separate coordinate/type coefficients, not both.')
+    if args.num_samples is not None and args.num_samples <= 0:
+        parser.error('--num_samples must be positive')
+    if args.batch_size <= 0:
+        parser.error('--batch_size must be positive')
 
     logger = misc.get_logger('evaluate')
 
     # Load config
     config = misc.load_config(args.config)
+    if args.checkpoint:
+        config.model.checkpoint = project_path(args.checkpoint)
     logger.info(config)
     misc.seed_all(config.sample.seed)
 
     # Load checkpoint
-    ckpt = torch.load(config.model.checkpoint, map_location=args.device)
+    ckpt = load_checkpoint(args.checkpoint or config.model.checkpoint, args.device)
     logger.info(f"Training Config: {ckpt['config']}")
 
     # Transforms
@@ -83,21 +112,52 @@ if __name__ == '__main__':
         ligand_atom_feature_dim=ligand_featurizer.feature_dim
     ).to(args.device)
     model.load_state_dict(ckpt['model'], strict=False if 'train_config' in config.model else True)
+    model.eval()
     logger.info(f'Successfully load the model! {config.model.checkpoint}')
 
-    # extract pli as condition
+    # ---- 条件来源（三选一，对应训练时覆盖的三种输入组合）----
+    # 1) --reference_ligand：refinement，现场从参考配体提取条件（encoder 是否看
+    #    参考配体由 config 的 guidance_use_reference_ligand 控制）
+    # 2) --pli_path：de novo + 指定相互作用 profile——不给参考配体，模型只看
+    #    7 维标签（训练组合 (pocket-only, 真实 pli) 28%），这是"可指定相互作用"
+    #    的主接口；profile 可由 scripts/extract_pli_profile.py 从任意已知配体提取，
+    #    或手工编辑（一行 = 一个口袋原子的相互作用 one-hot）
+    # 3) 都不给：纯无条件生成（w 自动失效）
     plic = PLIC()
+    if args.reference_ligand and args.pli_path:
+        raise ValueError('--reference_ligand 与 --pli_path 互斥：前者现场提取条件(refinement)，后者直接加载 profile(de novo)')
     if args.reference_ligand:
         print('extract pli as condition')
-        pli, pocket_path = plic.pli_processor(args.raw_ligand_path, args.pdb_path)
+        pli, pocket_path = plic.pli_processor(
+            args.raw_ligand_path, args.pdb_path,
+            already_cropped=False, return_pocket=True,
+            pocket_output=os.path.join(args.result_path, 'pocket.pdb'),
+        )
+        if pli is None:
+            raise RuntimeError('PLI extraction failed; inspect the reported protein/ligand error.')
         pli = torch.from_numpy(pli).to(torch.float32) 
+    elif args.pli_path:
+        pli = torch.from_numpy(np.load(args.pli_path)).to(torch.float32)
+        pocket_path = args.pdb_path
+        print(f'load pli profile from {args.pli_path}, shape={tuple(pli.shape)}')
     else:
         pli = None
+        pocket_path = args.pdb_path
 
 
     # Load pocket
     data = pdb_to_pocket_data(pocket_path)
     data = transform(data)
+    # pli 与口袋原子逐行对齐（模型 forward 里有 assert，这里提前给出可读报错）
+    if pli is not None and (pli.ndim != 2 or pli.shape != (len(data.protein_pos), 7)):
+        raise ValueError(
+            f'PLI shape {tuple(pli.shape)} does not match ({len(data.protein_pos)}, 7): '
+            f'profile 必须与 --pdb_path 给出的口袋逐原子对应。'
+            '请用 scripts/extract_pli_profile.py 同时导出的口袋文件，或重新提取。')
+    if pli is not None and (not torch.isfinite(pli).all() or (pli < 0).any()):
+        raise ValueError('PLI profile must contain finite, nonnegative values.')
+    if pli is not None:
+        pli = pli.to(args.device)
 
     # load raw ligand if reference_ligand is True
     if args.reference_ligand:
@@ -108,18 +168,29 @@ if __name__ == '__main__':
 
     if args.num_samples:
         config.sample.num_samples = args.num_samples
+    if args.num_steps is not None:
+        config.sample.num_steps = args.num_steps
+    default_pos = float(config.sample.get('guidance_scale_pos', 1.3))
+    default_v = float(config.sample.get('guidance_scale_v', 1.3))
+    if args.guidance_scale is not None:
+        guidance_pairs = [(x, x) for x in args.guidance_scale]
+    else:
+        guidance_pairs = [(args.guidance_scale_pos if args.guidance_scale_pos is not None else default_pos,
+                           args.guidance_scale_v if args.guidance_scale_v is not None else default_v)]
+    if any(not math.isfinite(x) for pair in guidance_pairs for x in pair):
+        parser.error('Guidance coefficients must be finite')
+    use_reference = bool(config.sample.get('guidance_use_reference_ligand', True))
+    if data_raw_ligand is None:
+        use_reference = False
 
     result_path = args.result_path
     os.makedirs(result_path, exist_ok=True)
     shutil.copyfile(args.config, os.path.join(result_path, 'sample.yml'))
     mols_save_path = os.path.join(result_path, f'sdf')
     
-    # for guidance_scale in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
-    for guidance_scale in [0.3]:
-
-
-        guidance_scale_pos=guidance_scale
-        guidence_scale_v=guidance_scale
+    for guidance_scale_pos, guidance_scale_v in guidance_pairs:
+        guidance_scale = (str(guidance_scale_pos) if guidance_scale_pos == guidance_scale_v
+                          else f'pos{guidance_scale_pos}_v{guidance_scale_v}')
         all_pred_pos, all_pred_v, pred_pos_traj, pred_v_traj, pred_v0_traj, pred_vt_traj, time_list = sample_diffusion_ligand(
             model, data, data_raw_ligand, config.sample.num_samples,
             batch_size=args.batch_size, device=args.device,
@@ -129,24 +200,41 @@ if __name__ == '__main__':
             sample_num_atoms=config.sample.sample_num_atoms,
             pli=pli,
             guidance_scale_pos=guidance_scale_pos,
-            guidance_scale_v=guidence_scale_v,        
+            guidance_scale_v=guidance_scale_v,
+            # True=旧模式（泄露对照）；False=无泄露模式（论文主线，encoder 走 pocket-only）
+            use_reference_ligand_in_guidance=use_reference,
         )
         result = {
             'data': data,
             'pred_ligand_pos': all_pred_pos,
             'pred_ligand_v': all_pred_v,
             'pred_ligand_pos_traj': pred_pos_traj,
-            'pred_ligand_v_traj': pred_v_traj
+            'pred_ligand_v_traj': pred_v_traj,
+            'sampling_metadata': {
+                'guidance_convention': 'null + g * (conditional - null)',
+                'guidance_scale_pos': guidance_scale_pos,
+                'guidance_scale_v': guidance_scale_v,
+                'use_reference_ligand_in_guidance': use_reference,
+                'checkpoint': config.model.checkpoint,
+                'num_samples': config.sample.num_samples,
+                'batch_size': args.batch_size,
+                'sample_num_atoms': config.sample.sample_num_atoms,
+                'pos_only': config.sample.pos_only,
+                'protein_path': str(Path(pocket_path).resolve()),
+                'num_steps': config.sample.num_steps,
+                'seed': config.sample.seed,
+            },
         }
-        logger.info(f'Sample done! Guidence scale is {guidance_scale}')
+        logger.info(f'Sample done! Guidance scale is {guidance_scale} '
+                    f'(use_reference_ligand_in_guidance={use_reference})')
 
         # reconstruction
         gen_mols = []
         n_recon_success, n_complete = 0, 0
         for sample_idx, (pred_pos, pred_v) in enumerate(zip(all_pred_pos, all_pred_v)):
-            pred_atom_type = trans.get_atomic_number_from_index(pred_v, mode='add_aromatic')
+            pred_atom_type = trans.get_atomic_number_from_index(pred_v, mode=ligand_atom_mode)
             try:
-                pred_aromatic = trans.is_aromatic_from_index(pred_v, mode='add_aromatic')
+                pred_aromatic = trans.is_aromatic_from_index(pred_v, mode=ligand_atom_mode)
                 mol = reconstruct.reconstruct_from_generated(pred_pos, pred_atom_type, pred_aromatic)
                 smiles = Chem.MolToSmiles(mol)
             except reconstruct.MolReconsError:
@@ -165,6 +253,8 @@ if __name__ == '__main__':
 
 
         torch.save(result, os.path.join(result_path, f'results_{guidance_scale}.pt'))
+        with open(os.path.join(result_path, f'sampling_{guidance_scale}.json'), 'w') as f:
+            json.dump(result['sampling_metadata'], f, indent=2)
 
         os.makedirs(mols_save_path, exist_ok=True)
         for idx, mol in enumerate(gen_mols):

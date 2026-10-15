@@ -1,4 +1,10 @@
 import argparse
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 import os
 
 from rdkit import Chem
@@ -9,6 +15,7 @@ from utils.evaluation import scoring_func
 from utils.evaluation.docking_qvina import QVinaDockingTask
 from datasets import get_dataset
 from easydict import EasyDict
+from utils.runtime import parse_bool
 
 
 if __name__ == '__main__':
@@ -18,7 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--out', type=str, default=None)
     parser.add_argument('--protein_root', type=str, default='./data/crossdocked_v1.1_rmsd1.0')
     parser.add_argument('--ligand_root', type=str, default='./data/crossdocked_v1.1_rmsd1.0_pocket10')
-    parser.add_argument('--use_uff', type=eval, default=True)
+    parser.add_argument('--use_uff', type=parse_bool, default=True)
     parser.add_argument('--size_factor', type=float, default=1.2)
     args = parser.parse_args()
 

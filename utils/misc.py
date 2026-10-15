@@ -7,24 +7,23 @@ import numpy as np
 import torch
 import yaml
 from easydict import EasyDict
+from utils.runtime import project_path
 
-class BlackHole(object):
-    def __setattr__(self, name, value):
-        pass
-
-    def __call__(self, *args, **kwargs):
-        return self
-
-    def __getattr__(self, name):
-        return self
 
 def load_config(path):
-    with open(path, 'r') as f:
-        return EasyDict(yaml.safe_load(f))
+    with open(project_path(path), 'r') as f:
+        config = EasyDict(yaml.safe_load(f))
+    for section, keys in [('data', ('path', 'split')), ('model', ('checkpoint',))]:
+        if section in config:
+            for key in keys:
+                if config[section].get(key):
+                    config[section][key] = project_path(config[section][key])
+    return config
 
 def get_logger(name, log_dir=None):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False
     formatter = logging.Formatter('[%(asctime)s::%(name)s::%(levelname)s] %(message)s')
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
@@ -67,19 +66,6 @@ def seed_all(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-def log_hyperparams(writer, args):
-    from torch.utils.tensorboard.summary import hparams
-    vars_args = {k: v if isinstance(v, str) else repr(v) for k, v in vars(args).items()}
-    exp, ssi, sei = hparams(vars_args, {})
-    writer.file_writer.add_summary(exp)
-    writer.file_writer.add_summary(ssi)
-    writer.file_writer.add_summary(sei)
-
-def int_tuple(argstr):
-    return tuple(map(int, argstr.split(',')))
-
-def str_tuple(argstr):
-    return tuple(argstr.split(','))
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

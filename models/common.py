@@ -90,33 +90,6 @@ def outer_product(*vectors):
     return out.squeeze()
 
 
-def get_h_dist(dist_metric, hi, hj):
-    if dist_metric == 'euclidean':
-        h_dist = torch.sum((hi - hj) ** 2, -1, keepdim=True)
-        return h_dist
-    elif dist_metric == 'cos_sim':
-        hi_norm = torch.norm(hi, p=2, dim=-1, keepdim=True)
-        hj_norm = torch.norm(hj, p=2, dim=-1, keepdim=True)
-        h_dist = torch.sum(hi * hj, -1, keepdim=True) / (hi_norm * hj_norm)
-        return h_dist, hj_norm
-
-
-def get_r_feat(r, r_exp_func, node_type=None, edge_index=None, mode='basic'):
-    if mode == 'origin':
-        r_feat = r
-    elif mode == 'basic':
-        r_feat = r_exp_func(r)
-    elif mode == 'sparse':
-        src, dst = edge_index
-        nt_src = node_type[src]  # [n_edges, 8]
-        nt_dst = node_type[dst]
-        r_exp = r_exp_func(r)
-        r_feat = outer_product(nt_src, nt_dst, r_exp)
-    else:
-        raise ValueError(mode)
-    return r_feat
-
-
 def compose_context(h_protein, h_ligand, pos_protein, pos_ligand, batch_protein, batch_ligand):
     # previous version has problems when ligand atom types are fixed
     # (due to sorting randomly in case of same element)

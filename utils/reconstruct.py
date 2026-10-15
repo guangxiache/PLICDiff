@@ -361,15 +361,6 @@ def fixup(atoms, mol, indicators):
                 atom.SetAromatic(True)
 
 
-def raw_obmol_from_generated(data):
-    xyz = data.ligand_context_pos.clone().cpu().tolist()
-    atomic_nums = data.ligand_context_element.clone().cpu().tolist()
-    # indicators = data.ligand_context_feature_full[:, -len(ATOM_FAMILIES_ID):].clone().cpu().bool().tolist()
-
-    mol, atoms = make_obmol(xyz, atomic_nums)
-    return mol, atoms
-
-
 UPGRADE_BOND_ORDER = {Chem.BondType.SINGLE: Chem.BondType.DOUBLE, Chem.BondType.DOUBLE: Chem.BondType.TRIPLE}
 
 

@@ -1,6 +1,12 @@
 import argparse
 import os
 import shutil
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 import numpy as np
 import torch, gc
@@ -17,6 +23,7 @@ import utils.transforms as trans
 from datasets import get_dataset
 from datasets.pl_data import FOLLOW_BATCH
 from models.molopt_score_model_pli_cross_atn import ScorePosNet3D
+from utils.runtime import load_checkpoint, project_path, validate_device
 
 
 def get_auroc(y_true, y_pred, feat_mode):
@@ -24,6 +31,8 @@ def get_auroc(y_true, y_pred, feat_mode):
     y_pred = np.array(y_pred)
     avg_auroc = 0.
     possible_classes = set(y_true)
+    if len(possible_classes) < 2:
+        return float('nan')
     for c in possible_classes:
         auroc = roc_auc_score(y_true == c, y_pred[:, c])
         avg_auroc += auroc * np.sum(y_true == c)
@@ -46,6 +55,10 @@ if __name__ == '__main__':
     parser.add_argument('--resume_train_diffusion', action='store_true', help='Whether to resume train model')
     parser.add_argument('--load_model_path', type=str) 
     args = parser.parse_args()
+    args.device = validate_device(args.device)
+    args.config = project_path(args.config)
+    if args.resume_train_diffusion and not args.load_model_path:
+        parser.error('--resume_train_diffusion requires --load_model_path')
 
     # Load config
     config = misc.load_config(args.config)
@@ -64,7 +77,11 @@ if __name__ == '__main__':
     logger.info(args)
     logger.info(config)
     shutil.copyfile(args.config, os.path.join(log_dir, os.path.basename(args.config)))
-    shutil.copytree('./models', os.path.join(log_dir, 'models'))
+    model_source_dir = Path(log_dir) / 'models'
+    model_source_dir.mkdir()
+    for source in ('common.py', 'egnn.py', 'uni_transformer.py', 'molopt_score_model_pli_cross_atn.py'):
+        shutil.copy2(ROOT_DIR / 'models' / source, model_source_dir / source)
+    shutil.copy2(ROOT_DIR / 'scripts' / 'PlicEncoder.py', Path(log_dir) / 'PlicEncoder.py')
 
     # Transformations
     protein_featurizer = trans.FeaturizeProteinAtom()
@@ -84,7 +101,11 @@ if __name__ == '__main__':
         config=config.data,
         transform=transform
     )
-    train_set, val_set = subsets['train'], subsets['test']
+    if 'val' not in subsets:
+        raise ValueError('The split must contain a val subset for validation; test is reserved for evaluation.')
+    train_set, val_set = subsets['train'], subsets['val']
+    if not len(train_set) or not len(val_set):
+        raise ValueError('Training and validation subsets must both be nonempty.')
     logger.info(f'Training: {len(train_set)} Validation: {len(val_set)}')
 
     collate_exclude_keys = ['ligand_nbh_list']
@@ -123,9 +144,9 @@ if __name__ == '__main__':
             batch_size = batch.num_graphs
             batch_protein=batch.protein_element_batch
             pli = batch.pocket_interaction_condition
-            pli = [torch.from_numpy(arr) for arr in pli]
-            pli = torch.cat(pli, dim=0).cuda()
-            pli = pli.to(torch.float32)
+            pli = (pli if torch.is_tensor(pli) else
+                   torch.cat([torch.as_tensor(arr) for arr in pli], dim=0))
+            pli = pli.to(device=batch.protein_pos.device, dtype=torch.float32)
             # Set cfg
             drop_condition_prob = 0.3
             mask = torch.rand(batch_size, 1) > drop_condition_prob
@@ -185,9 +206,9 @@ if __name__ == '__main__':
                 batch_size = batch.num_graphs
                 batch_protein=batch.protein_element_batch
                 pli = batch.pocket_interaction_condition
-                pli = [torch.from_numpy(arr) for arr in pli]
-                pli = torch.cat(pli, dim=0).cuda()
-                pli = pli.to(torch.float32)
+                pli = (pli if torch.is_tensor(pli) else
+                       torch.cat([torch.as_tensor(arr) for arr in pli], dim=0))
+                pli = pli.to(device=batch.protein_pos.device, dtype=torch.float32)
                 # Set cfg
                 drop_condition_prob = 0.3
                 mask = torch.rand(batch_size, 1) > drop_condition_prob
@@ -252,11 +273,11 @@ if __name__ == '__main__':
 
     try:
         if args.resume_train_diffusion:
-                checkpoint = torch.load(args.load_model_path)
+                checkpoint = load_checkpoint(args.load_model_path, args.device)
                 model.load_state_dict(checkpoint['model'])
-                # optimizer_vae.load_state_dict(checkpoint['optimizer'])
+                optimizer.load_state_dict(checkpoint['optimizer'])
                 scheduler.load_state_dict(checkpoint['scheduler'])
-                current_iter = checkpoint['iteration']
+                current_iter = checkpoint['iteration'] + 1
         else:
             current_iter = 1
 

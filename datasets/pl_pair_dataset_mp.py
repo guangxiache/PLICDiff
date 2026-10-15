@@ -22,8 +22,13 @@ class PocketLigandPairDataset(Dataset):
         self.db = None  
         self.keys = None  
         self.num_cpu = num_cpu
+        if self.num_cpu < 1:
+            raise ValueError('num_cpu must be positive.')
 
         if not os.path.exists(self.processed_path):
+            if not os.path.isfile(self.index_path):
+                raise FileNotFoundError(f'Dataset index not found: {self.index_path}. '
+                                        'Set data.path to the prepared pocket directory.')
             print(f'{self.processed_path} does not exist, begin processing data')
             self._process()
 
@@ -44,9 +49,17 @@ class PocketLigandPairDataset(Dataset):
             self.keys = list(txn.cursor().iternext(values=False))
 
     def _close_db(self):
-        self.db.close()  
+        if self.db is not None:
+            self.db.close()
         self.db = None
         self.keys = None
+
+    def __getstate__(self):
+        # LMDB handles cannot be pickled by spawn-based DataLoader workers.
+        state = self.__dict__.copy()
+        state['db'] = None
+        state['keys'] = None
+        return state
 
     
     def process_item(self, item): 
@@ -130,6 +143,10 @@ class PocketLigandPairDataset(Dataset):
         data = pickle.loads(self.db.begin().get(key))  
         data = ProteinLigandData(**data) 
         data.id = idx 
+        if not hasattr(data, 'pocket_interaction_condition'):
+            raise ValueError('This LMDB does not contain PLICDiff interaction conditions. '
+                             'Prepare it from the raw pocket/ligand pairs with this project; '
+                             'a TargetDiff LMDB alone is insufficient.')
         
         try:
             if data.protein_pos.size(0) <= 0:  

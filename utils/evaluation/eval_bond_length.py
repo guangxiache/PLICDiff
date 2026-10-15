@@ -26,7 +26,9 @@ def get_distribution(distances: Sequence[float], bins=eval_bond_length_config.DI
     """
     bin_counts = collections.Counter(np.searchsorted(bins, distances))
     bin_counts = [bin_counts[i] if i in bin_counts else 0 for i in range(len(bins) + 1)]
-    bin_counts = np.array(bin_counts) / np.sum(bin_counts)
+    bin_counts = np.array(bin_counts, dtype=float)
+    if bin_counts.sum():
+        bin_counts /= bin_counts.sum()
     return bin_counts
 
 
@@ -79,7 +81,7 @@ def get_pair_length_profile(pair_lengths):
 def eval_pair_length_profile(pair_length_profile):
     metrics = {}
     for k, gt_distribution in eval_bond_length_config.PAIR_EMPIRICAL_DISTRIBUTIONS.items():
-        if k not in pair_length_profile:
+        if k not in pair_length_profile or not np.any(pair_length_profile[k]):
             metrics[f'JSD_{k}'] = None
         else:
             metrics[f'JSD_{k}'] = sci_spatial.distance.jensenshannon(gt_distribution, pair_length_profile[k])
@@ -97,7 +99,8 @@ def plot_distance_hist(pair_length_profile, metrics=None, save_path=None):
         plt.step(x, pair_length_profile[k][1:])
         plt.legend(['True', 'Learned'])
         if metrics is not None:
-            plt.title(f'{k} JS div: {metrics["JSD_" + k]:.4f}')
+            value = metrics['JSD_' + k]
+            plt.title(f'{k} JS distance: {value:.4f}' if value is not None else f'{k}: no observations')
         else:
             plt.title(k)
 

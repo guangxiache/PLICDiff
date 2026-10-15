@@ -1,10 +1,9 @@
 import random
-from sympy import false, true
 from torch import nn
 import torch
 import math
 from torch_geometric.nn import GATConv
-from torch_scatter import scatter_add, scatter_mean
+from torch_scatter import scatter_mean
 
 ligand_atom_types = ['H', 'C', 'N', 'O', 'F', 'P', 'S', 'Cl']
 ligand_atom_add_aromatic_types = ['H', 'C1', 'C2', 'N1', 'N2', 'O1', 'O2', 'F', 'P1', 'P2', 'S1', 'S2', 'Cl']
@@ -58,8 +57,6 @@ def unsorted_segment_sum(data, segment_ids, num_segments, normalization_factor, 
     return result
 
 
-
-
 class PlicEncoder(nn.Module):
     def __init__(
             self, 
@@ -103,8 +100,6 @@ class PlicEncoder(nn.Module):
         self.H_lig_fusion = nn.Linear(hidden_nf + 3, hidden_nf)
         self.H_pocket_fusion = nn.Linear(hidden_nf + 3, hidden_nf)
 
-
-        
 
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
@@ -163,17 +158,16 @@ class PlicEncoder(nn.Module):
         return x_lig, x_pocket
     
 
-
-    def extract_pli_feat(self, lig_coords, pocket_coords, lig_a_hidx, pocket_a_hidx, pocket_r_hidx, lig_mask, pocket_mask, pli, sample_diffusion=false):
+    def extract_pli_feat(self, lig_coords, pocket_coords, lig_a_hidx, pocket_a_hidx, pocket_r_hidx, lig_mask, pocket_mask, pli, sample_diffusion=False):
         lig_coords, pocket_coords = self.remove_pocket_mean_batch_ligand(lig_coords, pocket_coords, lig_mask, pocket_mask)  
         device = pocket_coords.device
         if lig_coords is None:
             lig_coords = torch.rand(len(lig_mask), 3).to(pocket_coords.device)
             lig_a_hidx = torch.ones(len(lig_mask)).to(pocket_coords.device)
             lig_a_hidx = lig_a_hidx.int()
-            use_raw_ligand_info = false
+            use_raw_ligand_info = False
         else:
-            use_raw_ligand_info = true
+            use_raw_ligand_info = True
         num_lig = lig_coords.shape[0]
 
         complexes_mask = torch.cat([lig_mask, pocket_mask], dim=0)
@@ -268,9 +262,6 @@ class PlicEncoder(nn.Module):
         return pli
 
 
-
-
-    
 class GCL(nn.Module):
     def __init__(self, input_nf, output_nf, hidden_nf, normalization_factor, aggregation_method,
                  edges_in_d=0, nodes_att_dim=0, act_fn=nn.SiLU(), attention=False):

@@ -161,25 +161,6 @@ class PDBProtein(object):
             'atom_to_aa_type': np.array(self.atom_to_aa_type, dtype=np.int_)
         }
 
-    def to_dict_residue(self):
-        return {
-            'amino_acid': np.array(self.amino_acid, dtype=np.int_int_),
-            'center_of_mass': np.array(self.center_of_mass, dtype=np.float32),
-            'pos_CA': np.array(self.pos_CA, dtype=np.float32),
-            'pos_C': np.array(self.pos_C, dtype=np.float32),
-            'pos_N': np.array(self.pos_N, dtype=np.float32),
-            'pos_O': np.array(self.pos_O, dtype=np.float32),
-        }
-
-    def query_residues_radius(self, center, radius, criterion='center_of_mass'):
-        center = np.array(center).reshape(3)
-        selected = []
-        for residue in self.residues:
-            distance = np.linalg.norm(residue[criterion] - center, ord=2)
-            print(residue[criterion], distance)
-            if distance < radius:
-                selected.append(residue)
-        return selected
 
     def query_residues_ligand(self, ligand, radius, criterion='center_of_mass'):
         selected = []

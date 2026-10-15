@@ -90,14 +90,6 @@ def is_aromatic_from_index(index, mode):
     return is_aromatic
 
 
-def get_hybridization_from_index(index, mode):
-    if mode == 'full':
-        hybridization = [MAP_INDEX_TO_ATOM_TYPE_AROMATIC[i][1] for i in index.tolist()]
-    else:
-        raise ValueError
-    return hybridization
-
-
 def get_index(atom_num, hybridization, is_aromatic, mode):
     if mode == 'basic':
         return MAP_ATOM_TYPE_ONLY_TO_INDEX[int(atom_num)]

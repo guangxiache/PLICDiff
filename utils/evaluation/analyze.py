@@ -1,5 +1,4 @@
 import torch
-import matplotlib
 import numpy as np
 import scipy.stats as sp_stats
 
@@ -48,44 +47,8 @@ def normalize_histogram(hist):
     return prob
 
 
-def coord2distances(x):
-    x = x.unsqueeze(2)
-    x_t = x.transpose(1, 2)
-    dist = (x - x_t) ** 2
-    dist = torch.sqrt(torch.sum(dist, 3))
-    dist = dist.flatten()
-    return dist
-
-
-def earth_mover_distance(h1, h2):
-    p1 = normalize_histogram(h1)
-    p2 = normalize_histogram(h2)
-
-    distance = sp_stats.wasserstein_distance(p1, p2)
-    return distance
-
-
 def kl_divergence(p1, p2):
     return np.sum(p1 * np.log(p1 / p2))
-
-
-def kl_divergence_sym(h1, h2):
-    p1 = normalize_histogram(h1) + 1e-10
-    p2 = normalize_histogram(h2) + 1e-10
-
-    kl = kl_divergence(p1, p2)
-    kl_flipped = kl_divergence(p2, p1)
-
-    return (kl + kl_flipped) / 2.
-
-
-def js_divergence(h1, h2):
-    p1 = normalize_histogram(h1) + 1e-10
-    p2 = normalize_histogram(h2) + 1e-10
-
-    M = (p1 + p2) / 2
-    js = (kl_divergence(p1, M) + kl_divergence(p2, M)) / 2
-    return js
 
 
 def get_bond_order(atom1, atom2, distance):
@@ -141,37 +104,3 @@ def check_stability(positions, atom_type, debug=False, hs=False, return_nr_bonds
         return molecule_stable, nr_stable_bonds, len(x), nr_bonds
     else:
         return molecule_stable, nr_stable_bonds, len(x)
-
-
-def analyze_stability_for_molecules(molecule_list):
-    n_samples = len(molecule_list)
-    molecule_stable_list = []
-
-    molecule_stable = 0
-    nr_stable_bonds = 0
-    n_atoms = 0
-
-    for one_hot, x in molecule_list:
-        atom_type = one_hot.argmax(2).squeeze(0).cpu().detach().numpy()
-        x = x.squeeze(0).cpu().detach().numpy()
-
-        validity_results = check_stability(x, atom_type)
-
-        molecule_stable += int(validity_results[0])
-        nr_stable_bonds += int(validity_results[1])
-        n_atoms += int(validity_results[2])
-
-        if validity_results[0]:
-            molecule_stable_list.append((x, atom_type))
-
-    # Validity
-    fraction_mol_stable = molecule_stable / float(n_samples)
-    fraction_atm_stable = nr_stable_bonds / float(n_atoms)
-    validity_dict = {
-        'mol_stable': fraction_mol_stable,
-        'atm_stable': fraction_atm_stable,
-    }
-
-    # print('Validity:', validity_dict)
-
-    return validity_dict, molecule_stable_list
