@@ -21,6 +21,7 @@ logs_diffusion/
 outputs/
 samples/
 results/
+/evaluation/
 tmp/
 
 # Datasets and generated preprocessing artifacts

@@ -135,11 +135,28 @@ It uses the test example's stored PLI profile without reference-ligand structure
 
 ## Evaluation
 
+See [EVALUATION.md](EVALUATION.md) for all metric definitions, denominators, fingerprint
+settings, output files, SDF/baseline evaluation and paired pocket comparisons. The evaluation
+utilities include molecular structure similarity (`utils/evaluation/similarity.py`),
+uniqueness, diversity, QED, raw/transformed SA, stability, geometry, PLI and optional docking.
+
 Chemistry, reconstruction, stability and distance-distribution metrics do not require a docking installation:
 
 ```bash
 python scripts/evaluate_diffusion.py ./outputs/example --docking_mode none --atom_enc_mode add_aromatic
 ```
+
+Evaluate SDF molecules from any model with the same chemistry and geometry utilities:
+
+```bash
+python scripts/evaluate_molecules.py --sdf_dir ./outputs/example/sdf \
+  --model PLICDiff --pocket_id example --num_attempts 50 --out_dir ./evaluation/example
+```
+
+`--num_attempts` is the actual number of generation attempts, not the number of retained
+SDFs. If it is unknown, omit it: overall validity remains unavailable, and the valid
+fraction among submitted records is reported separately. CSV/JSON retain per-metric
+success/failure counts; optional docking failures do not discard chemistry scores.
 
 PLI similarity is evaluated on a **single reference-defined pocket**, keeping the protein atom order fixed across all generated ligands:
 

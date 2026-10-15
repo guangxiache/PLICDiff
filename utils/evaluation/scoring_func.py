@@ -2,11 +2,11 @@ from collections import Counter
 from copy import deepcopy
 
 import numpy as np
+from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Crippen, Lipinski
-from rdkit.Chem.FilterCatalog import *
 from rdkit.Chem.QED import qed
 
-from utils.evaluation.sascorer import compute_sa_score
+from utils.evaluation.sascorer import calculateScore, compute_sa_score
 
 
 def obey_lipinski(mol):
@@ -27,7 +27,9 @@ def get_logp(mol):
 
 def get_chem(mol):
     qed_score = qed(mol)
-    sa_score = compute_sa_score(mol)
+    # Match compute_sa_score: score a canonicalized graph, then round per molecule.
+    sa_raw = calculateScore(Chem.MolFromSmiles(Chem.MolToSmiles(mol)))
+    sa_score = round((10 - sa_raw) / 9, 2)
     logp_score = get_logp(mol)
     lipinski_score = obey_lipinski(mol)
     ring_info = mol.GetRingInfo()
@@ -38,6 +40,7 @@ def get_chem(mol):
     return {
         'qed': qed_score,
         'sa': sa_score,
+        'sa_raw': sa_raw,
         'logp': logp_score,
         'lipinski': lipinski_score,
         'ring_size': ring_size

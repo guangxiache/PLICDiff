@@ -16,18 +16,7 @@ if str(ROOT_DIR) not in sys.path:
 import numpy as np
 import torch
 from tqdm.auto import tqdm
-from datasets.extract_PLIC import PLIC
-
-
-def cosine_similarity(x, y):
-    x = np.asarray(x, dtype=float).ravel()
-    y = np.asarray(y, dtype=float).ravel()
-    if x.shape != y.shape:
-        raise ValueError(f'PLI atom alignment mismatch: {x.shape} versus {y.shape}')
-    if not np.isfinite(x).all() or not np.isfinite(y).all():
-        raise ValueError('Nonfinite PLI features')
-    norm = np.linalg.norm(x) * np.linalg.norm(y)
-    return float(np.clip(np.dot(x, y) / norm, -1.0, 1.0)) if norm else 0.0
+from utils.evaluation.pli import FixedPocketPLI, cosine_similarity
 
 
 def group_sdf_files_by_guidance_scale(ligand_dir):
@@ -54,26 +43,15 @@ def main():
         parser.error('No SDF files found in --ligand_dir')
     out = Path(args.out_dir or str(Path(args.ligand_dir).with_name(Path(args.ligand_dir).name + '_similarity_output')))
     out.mkdir(parents=True, exist_ok=True)
-    plic = PLIC()
-    reference, pocket_path = plic.pli_processor(
-        args.reference_ligand, args.protein_fn, already_cropped=False,
-        return_pocket=True, cutoff=args.radius, pocket_output=out / 'reference_pocket.pdb',
-    )
-    if reference is None:
-        raise RuntimeError('Reference PLI extraction failed; no scores were assigned.')
-    reference = reference[:, :6]
-    if not np.any(reference):
-        raise ValueError('Reference has no detected interactions; PLI cosine similarity is not informative.')
+    scorer = FixedPocketPLI(args.reference_ligand, args.protein_fn,
+                            out / 'reference_pocket.pdb', args.radius)
     rows, summary = [], {}
     for group, paths in groups.items():
         scores, failures = {}, []
         for path in tqdm(paths, desc=f'PLI {group}'):
             try:
                 # Every ligand uses the same pocket and atom order. Never crop per generated ligand.
-                profile = plic.pli_processor(str(path), pocket_path, already_cropped=True)
-                if profile is None:
-                    raise ValueError('PLIP/ligand parsing failed')
-                score = cosine_similarity(reference, profile[:, :6])
+                score = scorer.score_file(path)
                 if not math.isfinite(score):
                     raise ValueError('Nonfinite similarity')
                 scores[path.stem] = score

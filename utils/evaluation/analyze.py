@@ -1,6 +1,4 @@
-import torch
 import numpy as np
-import scipy.stats as sp_stats
 
 atom_encoder = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'P': 15, 'S': 16, 'Cl': 17}
 atom_decoder = {v: k for k, v in atom_encoder.items()}

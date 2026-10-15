@@ -26,7 +26,10 @@ ATOM_TYPE_DISTRIBUTION = {
 def eval_atom_type_distribution(pred_counter: Counter):
     total_num_atoms = sum(pred_counter.values())
     if total_num_atoms == 0:
-        return 0
+        return None
+    if any(count for atom, count in pred_counter.items() if atom not in ATOM_TYPE_DISTRIBUTION):
+        # Do not silently renormalize away atoms absent from the reference support.
+        return None
     pred_atom_distribution = {}
     for k in ATOM_TYPE_DISTRIBUTION:
         pred_atom_distribution[k] = pred_counter[k] / total_num_atoms

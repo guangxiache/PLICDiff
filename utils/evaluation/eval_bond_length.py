@@ -5,7 +5,6 @@ from typing import Tuple, Sequence, Dict, Optional
 
 import numpy as np
 from scipy import spatial as sci_spatial
-import matplotlib.pyplot as plt
 
 from utils.evaluation import eval_bond_length_config
 import utils.data as utils_data
@@ -89,6 +88,9 @@ def eval_pair_length_profile(pair_length_profile):
 
 
 def plot_distance_hist(pair_length_profile, metrics=None, save_path=None):
+    # Chemistry-only imports must not initialize a GUI backend.
+    import matplotlib.pyplot as plt
+
     gt_profile = eval_bond_length_config.PAIR_EMPIRICAL_DISTRIBUTIONS
     plt.figure(figsize=(6 * len(gt_profile), 4))
 
