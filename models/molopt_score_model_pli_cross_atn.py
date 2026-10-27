@@ -649,10 +649,6 @@ class ScorePosNet3D(nn.Module):
                 )
             else:
                 if use_reference_ligand_in_guidance:
-                    # 模式一（历史行为，泄露对照）：两个分支均接收参考配体。对应训练组合
-                    # (配体 encoder 路径, 真实 pli) 42% / (配体 encoder 路径, none) 18%。
-                    # cond-uncond 之差虽只来自 pli 标签，但两个分支的绝对预测都受参考配体
-                    # 影响（生成物贴近参考配体）——作为论文中的泄露对照组保留。
                     preds_cond, _ = self(
                         protein_pos=protein_pos,
                         protein_v=protein_v,
@@ -681,12 +677,6 @@ class ScorePosNet3D(nn.Module):
                         time_step=t
                     )
                 else:
-                    # 模式二（无泄露，论文主线）：两个分支都不喂参考配体。encoder 走
-                    # lig_coords=None 的 pocket-only 路径 —— 训练时 prob_if=0.6 使该路径
-                    # 以 40% 概率被采样（get_diffusion_loss 传 batch_raw_ligand=None、
-                    # lig_coords=x_0 但 pocket-only 分支不使用 H_lig），其中
-                    # (pocket-only, 真实 pli) 28% / (pocket-only, none) 12% 均在训练分布内，
-                    # 因此无需重训。cond-uncond 完全由 7 维 pli 标签决定。
                     preds_cond, _ = self(
                         protein_pos=protein_pos,
                         protein_v=protein_v,
@@ -715,9 +705,6 @@ class ScorePosNet3D(nn.Module):
                         time_step=t
                     )
                 # Note: init_ligand_pos and init_ligand_v should not be confused
-                # 标准 classifier-free guidance:  preds = uncond + w * (cond - uncond)
-                # 2026-10-03 由旧式 preds = cond + w * (cond - uncond) 恢复为标准式。
-                # 旧式换算: w_standard = 1 + w_old  (旧 0.3 ≡ 标准 1.3, 旧 2.0 ≡ 标准 3.0)
                 preds = {
                     'pred_ligand_pos': preds_uncond['pred_ligand_pos'] + guidance_scale_pos * (
                         preds_cond['pred_ligand_pos'] - preds_uncond['pred_ligand_pos']),

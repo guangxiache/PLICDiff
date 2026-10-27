@@ -33,13 +33,7 @@ class PLIC:
 
     @staticmethod
     def _obabel():
-        """定位 obabel 可执行文件。
-
-        obabel 装在 conda/mamba 环境的 bin 下，交互 shell（已 conda activate）
-        里 os.system 能找到，而非交互环境（nohup 训练、SSH 直跑脚本、cron）
-        的 PATH 里没有 —— 之前因此出现 complex_mol 为 None、条件矩阵静默
-        变 None 的问题。这里显式搜索 sys.prefix/bin 与 PATH。
-        """
+        """Locate the obabel executable, searching sys.prefix/bin and PATH."""
         import sys
         exe = shutil.which("obabel")
         if exe:
@@ -48,8 +42,8 @@ class PLIC:
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
         raise RuntimeError(
-            "obabel not found: 请先激活含 openbabel 的环境 "
-            "(micromamba activate plicdiff)，或将其 bin 目录加入 PATH"
+            "obabel not found: activate the environment containing openbabel "
+            "(micromamba activate plicdiff) or add its bin directory to PATH"
         )
 
     def check_and_create_directory(self, directory_path):
@@ -283,18 +277,13 @@ class PLIC:
     # pocket-Ligand interaction (PLI) processor
     def pli_processor(self, ligand_fn, pocket_fn, already_cropped=True, return_pocket=False,
                       cutoff=10.0, pocket_output=None):
-        """计算 per-pocket-atom 的蛋白质-配体相互作用条件矩阵（7 维 one-hot）。
+        """Compute the per-pocket-atom protein-ligand interaction condition matrix (7-channel one-hot).
 
-        本方法是原 datasets/extract_PLIC.py（训练/数据预处理路径）与
-        scripts/extract_PLIC.py（采样/评测路径）两份实现的合并，两条路径
-        的行为分别由两个开关精确复刻：
-
-        already_cropped=True  —— 训练路径：pocket_fn 已是切好的口袋文件，
-            直接读取（与 pl_pair_dataset_mp.process_item 的调用方式一致）。
-        already_cropped=False —— 采样路径：pocket_fn 视为完整蛋白，先用
-            _extract_binding_pocket 以配体为中心、cutoff=10 A 重切口袋。
-        return_pocket=True    —— 额外返回去氢后口袋的 PDB 路径
-            （原采样路径行为，sample_for_pocket 用它作为模型口袋输入）。
+        already_cropped=True  - training path: pocket_fn is an already cropped pocket file,
+                                read directly.
+        already_cropped=False - sampling path: pocket_fn is a full protein; the pocket is
+                                re-cropped around the ligand with cutoff=10 A.
+        return_pocket=True    - additionally return the path of the hydrogen-stripped pocket PDB.
         """
         try:
             ligand_mol = self.rd_file(ligand_fn)

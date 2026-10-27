@@ -68,7 +68,7 @@ class PlicEncoder(nn.Module):
             sin_embedding=False,
             act_fn=nn.SiLU(),
             EGNN_layers=1,
-            prob_if = 0.6,
+            prob_if = 0.5,
             ):
         super(PlicEncoder, self).__init__()
 

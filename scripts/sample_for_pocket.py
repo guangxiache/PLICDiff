@@ -65,7 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_samples', type=int)
     parser.add_argument('--reference_ligand', action='store_true')
     parser.add_argument('--raw_ligand_path', type=str)
-    parser.add_argument('--pli_path', type=str, help='de novo 模式：直接加载相互作用 profile (.npy, shape=(口袋原子数,7))，不给参考配体')
+    parser.add_argument('--pli_path', type=str, help='de novo mode: load a PLI profile (.npy, shape=(n_pocket_atoms, 7)) instead of a reference ligand')
     args = parser.parse_args()
     args.device = validate_device(args.device)
     args.config = project_path(args.config)
@@ -115,17 +115,9 @@ if __name__ == '__main__':
     model.eval()
     logger.info(f'Successfully load the model! {config.model.checkpoint}')
 
-    # ---- 条件来源（三选一，对应训练时覆盖的三种输入组合）----
-    # 1) --reference_ligand：refinement，现场从参考配体提取条件（encoder 是否看
-    #    参考配体由 config 的 guidance_use_reference_ligand 控制）
-    # 2) --pli_path：de novo + 指定相互作用 profile——不给参考配体，模型只看
-    #    7 维标签（训练组合 (pocket-only, 真实 pli) 28%），这是"可指定相互作用"
-    #    的主接口；profile 可由 scripts/extract_pli_profile.py 从任意已知配体提取，
-    #    或手工编辑（一行 = 一个口袋原子的相互作用 one-hot）
-    # 3) 都不给：纯无条件生成（w 自动失效）
     plic = PLIC()
     if args.reference_ligand and args.pli_path:
-        raise ValueError('--reference_ligand 与 --pli_path 互斥：前者现场提取条件(refinement)，后者直接加载 profile(de novo)')
+        raise ValueError('--reference_ligand and --pli_path are mutually exclusive')
     if args.reference_ligand:
         print('extract pli as condition')
         pli, pocket_path = plic.pli_processor(
@@ -148,12 +140,11 @@ if __name__ == '__main__':
     # Load pocket
     data = pdb_to_pocket_data(pocket_path)
     data = transform(data)
-    # pli 与口袋原子逐行对齐（模型 forward 里有 assert，这里提前给出可读报错）
     if pli is not None and (pli.ndim != 2 or pli.shape != (len(data.protein_pos), 7)):
         raise ValueError(
             f'PLI shape {tuple(pli.shape)} does not match ({len(data.protein_pos)}, 7): '
-            f'profile 必须与 --pdb_path 给出的口袋逐原子对应。'
-            '请用 scripts/extract_pli_profile.py 同时导出的口袋文件，或重新提取。')
+            'The profile must match the pocket given by --pdb_path atom by atom. '
+            'Use the pocket exported together with the profile, or re-extract it.')
     if pli is not None and (not torch.isfinite(pli).all() or (pli < 0).any()):
         raise ValueError('PLI profile must contain finite, nonnegative values.')
     if pli is not None:
@@ -201,7 +192,6 @@ if __name__ == '__main__':
             pli=pli,
             guidance_scale_pos=guidance_scale_pos,
             guidance_scale_v=guidance_scale_v,
-            # True=旧模式（泄露对照）；False=无泄露模式（论文主线，encoder 走 pocket-only）
             use_reference_ligand_in_guidance=use_reference,
         )
         result = {

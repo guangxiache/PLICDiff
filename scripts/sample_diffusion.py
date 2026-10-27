@@ -166,7 +166,7 @@ if __name__ == '__main__':
     parser.add_argument('--reference_ligand', action='store_true')
     parser.add_argument('--pdb_path', type=str)
     parser.add_argument('--raw_ligand_path', type=str)
-    parser.add_argument('--no_pli', action='store_true', help='禁用数据集存储的 pli 条件，纯无条件采样')
+    parser.add_argument('--no_pli', action='store_true', help='Disable the stored PLI condition and sample unconditionally')
 
     args = parser.parse_args()
     args.device = validate_device(args.device)
@@ -221,13 +221,6 @@ if __name__ == '__main__':
     logger.info(f'Successfully load the model! {config.model.checkpoint}')
 
     data = test_set[args.data_id]
-    # ---- 条件来源 ----
-    # --reference_ligand：refinement（现场提取，encoder 是否看参考配体由
-    #   guidance_use_reference_ligand 控制）
-    # 默认（无 --no_pli）：使用该测试样本在 LMDB 中存储的真实配体相互作用
-    #   profile —— 只用标签、不给配体几何/原子信息，是"可控相互作用"评测的
-    #   公平姿势（de novo + 条件控制）
-    # --no_pli：纯无条件（w 失效），作 baseline
     stored = getattr(data, 'pocket_interaction_condition', None)
     if stored is not None and not args.no_pli:
         pli = torch.as_tensor(np.asarray(stored), dtype=torch.float32, device=args.device)
@@ -244,10 +237,8 @@ if __name__ == '__main__':
         center_pos_mode=config.sample.center_pos_mode,
         sample_num_atoms=config.sample.sample_num_atoms,
         pli = pli,
-        # 标准 CFG 语义（旧非标准式换算 w = 1 + w_old；默认 3.0 等效旧硬编码 2.0）
         guidance_scale_pos=getattr(config.sample, 'guidance_scale_pos', 3.0),
         guidance_scale_v=getattr(config.sample, 'guidance_scale_v', 3.0),
-        # True=旧模式（两分支看参考配体，泄露对照）；False=无泄露模式（论文主线）
         use_reference_ligand_in_guidance=False,
     )
     result = {
