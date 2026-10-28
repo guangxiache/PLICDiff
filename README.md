@@ -433,8 +433,5 @@ PLICDiff builds on [TargetDiff](https://github.com/guanjq/targetdiff) and uses
 [RDKit](https://www.rdkit.org/), [Open Babel](https://openbabel.org/) and
 [PLIP](https://github.com/pharmai/plip).
 
-License texts: [PLICDiff](LICENSE), [TargetDiff](third_party/TargetDiff_LICENSE),
-and [LiGAN](third_party/LiGAN_LICENSE). The reconstruction module contains
-LiGAN-derived code under GPLv2; its source notice is retained in
-[reconstruct.py](utils/reconstruct.py). Other third-party notices remain in the
-corresponding source files.
+See [LICENSE](LICENSE), the license files in [third_party/](third_party/),
+and the notices retained in the corresponding source files.
