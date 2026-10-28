@@ -1,7 +1,6 @@
 """Shared PLIP extraction with a fixed protein atom order and seven PLI channels."""
 from rdkit import Chem
 import os
-import shutil
 import traceback
 import tempfile
 from pathlib import Path
@@ -31,29 +30,6 @@ class PLIC:
         self._tmp_dir = self._workspace.name
 
 
-    @staticmethod
-    def _obabel():
-        """Locate the obabel executable, searching sys.prefix/bin and PATH."""
-        import sys
-        exe = shutil.which("obabel")
-        if exe:
-            return exe
-        cand = os.path.join(sys.prefix, "bin", "obabel")
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
-        raise RuntimeError(
-            "obabel not found: activate the environment containing openbabel "
-            "(micromamba activate plicdiff) or add its bin directory to PATH"
-        )
-
-    def check_and_create_directory(self, directory_path):
-        if not os.path.exists(directory_path):
-            os.makedirs(directory_path)
-            print(f"Directory '{directory_path}' created.")
-        else:
-            print(f"Directory '{directory_path}' already exists.")
-
-
     def rd_file(self, fn):
         fn = str(fn)
         extension = Path(fn).suffix.lower().lstrip('.')
@@ -66,10 +42,8 @@ class PLIC:
             mol = Chem.MolFromPDBFile(fn)
 
         else:
-            # print("Wrong file format...")
             return
         if mol is None:
-            # print("No mol from file...")
             return
         return mol
 
@@ -122,29 +96,17 @@ class PLIC:
         fd, path = tempfile.mkstemp(
             suffix=".pdb", prefix="tmp_poc_", dir=self._tmp_dir
         )
+        os.close(fd)
         if use_whole_protein:
             io.save(path, NonHeteroSelect())
         else:
             io.save(path, DistSelect())
         m2 = Chem.MolFromPDBFile(path, removeHs=False, sanitize=False)
         structure2 = parser.get_structure("pocket", path)
-        os.close(fd)
         return m2, structure2, path
 
-    def _filter_ligand(self, ligand_mol):
-        if ligand_mol is None:
-            print("ligand_mol is None")
-            return False
-        return True
-
-    def _filter_pocket(self, pocket_mol):
-        if pocket_mol is None:
-            print("pocket_mol is None")
-            return False
-        return True
-    
     def _join_complex(self, ligand_fn, pocket_fn, complex_fn=None):
-        """Write ligand first, then the exact model pocket order; never invoke a shell."""
+        """Write the heavy-atom ligand followed by the model pocket atom order."""
         fd = None
         if complex_fn is None:
             fd, complex_fn = tempfile.mkstemp(
@@ -171,7 +133,7 @@ class PLIC:
         return complex_mol, complex_fn, fd
 
 
-    def _get_complex_interaction_info(   
+    def _get_complex_interaction_info(
         self,
         complex_fn,
     ):
@@ -185,7 +147,7 @@ class PLIC:
         if len(ligs) == 0:
             raise ValueError('PLIP did not recognize the LIG residue in the assembled complex.')
         my_mol.analyze()
-        my_interactions = my_mol.interaction_sets[ligs[0]] 
+        my_interactions = my_mol.interaction_sets[ligs[0]]
 
         anions = my_interactions.saltbridge_pneg
         cations = my_interactions.saltbridge_lneg
@@ -194,26 +156,22 @@ class PLIC:
         hydros = my_interactions.hydrophobic_contacts
         pipis = my_interactions.pistacking
 
-        # 1. salt-bridges
         anion_indices, cation_indices = [], []
         for an in anions:
             anion_indices += [x - 1 for x in an.negative.atoms_orig_idx]
         for ct in cations:
             cation_indices += [x - 1 for x in ct.positive.atoms_orig_idx]
 
-        # 2. hydrogen bonds
         hbd_indices, hba_indices = [], []
         for hbd in hbds:
             hbd_indices += [hbd.d_orig_idx - 1]
         for hba in hbas:
             hba_indices += [hba.a_orig_idx - 1]
 
-        # 3. Hydrophobic interactions
         hyd_indices = []
         for hyd in hydros:
             hyd_indices += [hyd.bsatom_orig_idx - 1]
 
-        # 4. Pi-Pi Stackings
         pipi_indices = []
         for pi in pipis:
             pipi_indices += [x - 1 for x in pi.proteinring.atoms_orig_idx]
@@ -234,20 +192,19 @@ class PLIC:
             pipi_indices,
             None,
         )
-    
+
     def _get_one_hot_vector(self, item, item_list, use_unk=True):
         if item not in item_list:
             if use_unk:
                 ind = -1
             else:
-                print(f"Item not in the list: {item}")
-                exit()
+                raise ValueError(f'Unknown interaction type: {item}')
         else:
-            ind = item_list.index(item) 
+            ind = item_list.index(item)
         if use_unk:
             return list(np.eye(len(item_list) + 1)[ind])
         else:
-            return list(np.eye(len(item_list))[ind]) 
+            return list(np.eye(len(item_list))[ind])
 
     def _get_pocket_interaction_matrix(self, ligand_n, pocket_n, info):
         anion, cation, hbd, hba, hydro, pipi, mask = info
@@ -274,16 +231,12 @@ class PLIC:
         return pocket_intr_mat
 
 
-    # pocket-Ligand interaction (PLI) processor
     def pli_processor(self, ligand_fn, pocket_fn, already_cropped=True, return_pocket=False,
                       cutoff=10.0, pocket_output=None):
-        """Compute the per-pocket-atom protein-ligand interaction condition matrix (7-channel one-hot).
+        """Return aligned per-atom PLI labels with seven one-hot channels.
 
-        already_cropped=True  - training path: pocket_fn is an already cropped pocket file,
-                                read directly.
-        already_cropped=False - sampling path: pocket_fn is a full protein; the pocket is
-                                re-cropped around the ligand with cutoff=10 A.
-        return_pocket=True    - additionally return the path of the hydrogen-stripped pocket PDB.
+        Set already_cropped=False to select a pocket around the ligand using cutoff (Å).
+        Set return_pocket=True to also export the matching heavy-atom pocket PDB.
         """
         try:
             ligand_mol = self.rd_file(ligand_fn)
@@ -297,7 +250,6 @@ class PLIC:
                     pocket_str is not None
                 )
             ligand_mol = Chem.RemoveHs(ligand_mol)
-            assert self._filter_ligand(ligand_mol), "ligand_mol is not valid"
             complex_pocket_fn = pocket_fn if already_cropped else pocket_fn_2
             protein = PDBProtein(str(complex_pocket_fn))
             if not protein.atoms:

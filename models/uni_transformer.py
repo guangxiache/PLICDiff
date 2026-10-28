@@ -22,14 +22,11 @@ class BaseX2HAttLayer(nn.Module):
         self.ew_net_type = ew_net_type
         self.out_fc = out_fc
 
-        # attention key func
         kv_input_dim = input_dim * 2 + edge_feat_dim + r_feat_dim
         self.hk_func = MLP(kv_input_dim, output_dim, hidden_dim, norm=norm, act_fn=act_fn)
 
-        # attention value func
         self.hv_func = MLP(kv_input_dim, output_dim, hidden_dim, norm=norm, act_fn=act_fn)
 
-        # attention query func
         self.hq_func = MLP(input_dim, output_dim, hidden_dim, norm=norm, act_fn=act_fn)
         if ew_net_type == 'r':
             self.ew_net = nn.Sequential(nn.Linear(r_feat_dim, 1), nn.Sigmoid())
@@ -44,15 +41,11 @@ class BaseX2HAttLayer(nn.Module):
         src, dst = edge_index
         hi, hj = h[dst], h[src]
 
-        # multi-head attention
-        # decide inputs of k_func and v_func
         kv_input = torch.cat([r_feat, hi, hj], -1)
         if edge_feat is not None:
             kv_input = torch.cat([edge_feat, kv_input], -1)
 
-        # compute k
         k = self.hk_func(kv_input).view(-1, self.n_heads, self.output_dim // self.n_heads)
-        # compute v
         v = self.hv_func(kv_input)
 
         if self.ew_net_type == 'r':
@@ -66,14 +59,11 @@ class BaseX2HAttLayer(nn.Module):
         v = v * e_w
         v = v.view(-1, self.n_heads, self.output_dim // self.n_heads)
 
-        # compute q
         q = self.hq_func(h).view(-1, self.n_heads, self.output_dim // self.n_heads)
 
-        # compute attention weights
         alpha = scatter_softmax((q[dst] * k / np.sqrt(k.shape[-1])).sum(-1), dst, dim=0,
                                 dim_size=N)
 
-        # perform attention-weighted message-passing
         m = alpha.unsqueeze(-1) * v
         output = scatter_sum(m, dst, dim=0, dim_size=N)
         output = output.view(-1, self.output_dim)
@@ -110,8 +100,6 @@ class BaseH2XAttLayer(nn.Module):
         src, dst = edge_index
         hi, hj = h[dst], h[src]
 
-        # multi-head attention
-        # decide inputs of k_func and v_func
         kv_input = torch.cat([r_feat, hi, hj], -1)
         if edge_feat is not None:
             kv_input = torch.cat([edge_feat, kv_input], -1)
@@ -128,13 +116,11 @@ class BaseH2XAttLayer(nn.Module):
             e_w = 1.
         v = v * e_w
 
-        v = v.unsqueeze(-1) * rel_x.unsqueeze(1)  # (xi - xj) [n_edges, n_heads, 3] 
+        v = v.unsqueeze(-1) * rel_x.unsqueeze(1)  # (xi - xj) [n_edges, n_heads, 3]
         q = self.xq_func(h).view(-1, self.n_heads, self.output_dim // self.n_heads)
 
-        # Compute attention weights
         alpha = scatter_softmax((q[dst] * k / np.sqrt(k.shape[-1])).sum(-1), dst, dim=0, dim_size=N)  # (E, heads)
 
-        # Perform attention-weighted message-passing
         m = alpha.unsqueeze(-1) * v  # (E, heads, 3)
         output = scatter_sum(m, dst, dim=0, dim_size=N)  # (N, heads, 3)
         return output.mean(1)  # [num_nodes, 3]
@@ -216,7 +202,6 @@ class UniTransformerO2TwoUpdateGeneral(nn.Module):
                  cutoff_mode='radius', ew_net_type='r',
                  num_init_x2h=1, num_init_h2x=0, num_x2h=1, num_h2x=1, r_max=10., x2h_out_fc=True, sync_twoup=False):
         super().__init__()
-        # Build the network
         self.num_blocks = num_blocks
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -226,7 +211,6 @@ class UniTransformerO2TwoUpdateGeneral(nn.Module):
         self.act_fn = act_fn
         self.norm = norm
         self.num_node_types = num_node_types
-        # radius graph / knn graph
         self.cutoff_mode = cutoff_mode
         self.k = k
         self.ew_net_type = ew_net_type
@@ -274,7 +258,7 @@ class UniTransformerO2TwoUpdateGeneral(nn.Module):
 
     def _connect_edge(self, x, mask_ligand, batch):
         if self.cutoff_mode == 'radius':
-            edge_index = radius_graph(x, r=self.r, batch=batch, flow='source_to_target')
+            edge_index = radius_graph(x, r=self.r_max, batch=batch, flow='source_to_target')
         elif self.cutoff_mode == 'knn':
             edge_index = knn_graph(x, k=self.k, batch=batch, flow='source_to_target')
         elif self.cutoff_mode == 'hybrid':
@@ -306,7 +290,6 @@ class UniTransformerO2TwoUpdateGeneral(nn.Module):
             edge_index = self._connect_edge(x, mask_ligand, batch)
             src, dst = edge_index
 
-            # edge type (dim: 4)
             edge_type = self._build_edge_type(edge_index, mask_ligand)
             if self.ew_net_type == 'global':
                 dist = torch.norm(x[dst] - x[src], p=2, dim=-1, keepdim=True)

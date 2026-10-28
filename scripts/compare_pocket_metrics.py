@@ -1,4 +1,4 @@
-"""Compare pocket means using paired pocket bootstrap, rather than molecule bootstrap."""
+"""Compare paired pocket means and bootstrap their mean difference."""
 import argparse
 import csv
 import json
@@ -55,7 +55,7 @@ def compare_pockets(paths, reference_model='PLICDiff', metric='pli_similarity',
         for pocket in pockets:
             scores = grouped[model].get(pocket, [])
             if not scores:
-                raise ValueError(f'No successful {metric} values for {model}/{pocket}; do not silently drop pockets')
+                raise ValueError(f'No successful {metric} values for {model}/{pocket}')
             mean = float(np.mean(scores))
             values.append(mean)
             pocket_rows.append(dict(model=model, pocket_id=pocket, n=len(scores), mean=mean))

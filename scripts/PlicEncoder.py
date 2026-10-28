@@ -23,14 +23,14 @@ class SinusoidsEmbeddingNew(nn.Module):
         emb = x * self.frequencies[None, :].to(x.device)
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb.detach()
-    
 
-def get_edges(mask, x=None, edge_cutoff=None): 
+
+def get_edges(mask, x=None, edge_cutoff=None):
     adj = mask[:, None] == mask[None, :]
     if edge_cutoff is not None:
         adj = adj & (torch.cdist(x, x) <= float(edge_cutoff))
     edges = torch.stack(torch.where(adj), dim=0)
-    return edges        
+    return edges
 
 def coord2diff(x, edge_index, norm_constant=1):
     row, col = edge_index
@@ -59,36 +59,37 @@ def unsorted_segment_sum(data, segment_ids, num_segments, normalization_factor, 
 
 class PlicEncoder(nn.Module):
     def __init__(
-            self, 
+            self,
             hidden_nf: int = 128,
             edge_cutoff = None,
             coords_range=15,
-            normalization_factor=100, 
+            normalization_factor=100,
             aggregation_method='sum',
             sin_embedding=False,
             act_fn=nn.SiLU(),
             EGNN_layers=1,
             prob_if = 0.5,
+            num_ligand_types=len(ligand_atom_add_aromatic_types),
             ):
         super(PlicEncoder, self).__init__()
 
         self.hidden_nf = hidden_nf
-        self.ligand_atom_type_embed = nn.Embedding(len(ligand_atom_add_aromatic_types) + 1, hidden_nf)
+        self.ligand_atom_type_embed = nn.Embedding(num_ligand_types + 1, hidden_nf)
         self.pocket_atom_type_embed = nn.Embedding(len(pocket_atom_types) + 1, hidden_nf)
         self.pocket_residue_type_embed = nn.Embedding(len(residue_types) + 1, hidden_nf)
         self.residue_type_embed = nn.Embedding(len(residue_types) + 1, hidden_nf)
         self.pocket_feat_fusion = nn.Linear(hidden_nf * 2, hidden_nf)
         self.F_GATlayer = nn.ModuleList([
-            GATConv(hidden_nf, hidden_nf*2, heads=2, add_self_loops=True)  # concat=False
+            GATConv(hidden_nf, hidden_nf*2, heads=2, add_self_loops=True)
         ])
-        self.F_mlp = nn.Sequential( 
+        self.F_mlp = nn.Sequential(
             nn.Linear(hidden_nf*2*(self.F_GATlayer[0].heads), hidden_nf),
             act_fn,
             nn.Linear(hidden_nf, hidden_nf)
         )
         self.pli_emb = nn.Linear(7, hidden_nf)
         self.I_GATlayer = nn.ModuleList([
-            GATConv(hidden_nf+self.pli_emb.out_features, hidden_nf*2, heads=2, add_self_loops=True)  
+            GATConv(hidden_nf+self.pli_emb.out_features, hidden_nf*2, heads=2, add_self_loops=True)
         ])
         self.pli_mlp = nn.Linear(hidden_nf*2*self.I_GATlayer[0].heads, hidden_nf)
         self.pocket_type_fusion = nn.Linear(hidden_nf * 2, hidden_nf)
@@ -104,50 +105,50 @@ class PlicEncoder(nn.Module):
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
         self.prob_if = prob_if
-        self.edge_cutoff = edge_cutoff 
-        self.coords_range_layer = float(coords_range/1)    
+        self.edge_cutoff = edge_cutoff
+        self.coords_range_layer = float(coords_range/1)
         if sin_embedding:
             self.sin_embedding = SinusoidsEmbeddingNew()
             edge_feat_nf = self.sin_embedding.dim * 2
         else:
             self.sin_embedding = None
-            edge_feat_nf = 2    
+            edge_feat_nf = 2
 
 
         self.EGNN_lig_module = nn.ModuleList([
-            EquivariantBlock( 
-                hidden_nf, 
+            EquivariantBlock(
+                hidden_nf,
                 edge_feat_nf=edge_feat_nf,
                 act_fn=nn.SiLU(),
                 n_layers=1,
-                attention=False, 
-                norm_diff=True, 
+                attention=False,
+                norm_diff=True,
                 tanh=False,
                 coords_range=coords_range,
                 norm_constant=1,
                 sin_embedding=self.sin_embedding,
                 normalization_factor=self.normalization_factor,
                 aggregation_method=self.aggregation_method
-            )
+            ) for _ in range(EGNN_layers)
         ])
 
         self.EGNN_pocket_module = nn.ModuleList([
-            EquivariantBlock( 
-                hidden_nf, 
+            EquivariantBlock(
+                hidden_nf,
                 edge_feat_nf=edge_feat_nf,
                 act_fn=nn.SiLU(),
                 n_layers=1,
-                attention=False, 
-                norm_diff=True, 
+                attention=False,
+                norm_diff=True,
                 tanh=False,
                 coords_range=coords_range,
                 norm_constant=1,
                 sin_embedding=self.sin_embedding,
                 normalization_factor=self.normalization_factor,
                 aggregation_method=self.aggregation_method
-            )
+            ) for _ in range(EGNN_layers)
         ])
-    
+
     def remove_pocket_mean_batch_ligand(self, x_lig, x_pocket, lig_indices, pocket_indices):
 
         pocket_mean = scatter_mean(x_pocket, pocket_indices, dim=0)
@@ -156,10 +157,10 @@ class PlicEncoder(nn.Module):
         x_pocket = x_pocket - pocket_mean[pocket_indices]
         x_pocket = x_pocket.float()
         return x_lig, x_pocket
-    
+
 
     def extract_pli_feat(self, lig_coords, pocket_coords, lig_a_hidx, pocket_a_hidx, pocket_r_hidx, lig_mask, pocket_mask, pli, sample_diffusion=False):
-        lig_coords, pocket_coords = self.remove_pocket_mean_batch_ligand(lig_coords, pocket_coords, lig_mask, pocket_mask)  
+        lig_coords, pocket_coords = self.remove_pocket_mean_batch_ligand(lig_coords, pocket_coords, lig_mask, pocket_mask)
         device = pocket_coords.device
         if lig_coords is None:
             lig_coords = torch.rand(len(lig_mask), 3).to(pocket_coords.device)
@@ -171,13 +172,12 @@ class PlicEncoder(nn.Module):
         num_lig = lig_coords.shape[0]
 
         complexes_mask = torch.cat([lig_mask, pocket_mask], dim=0)
-        # complexes_coords = torch.cat([lig_coords, pocket_coords], dim=0).to(torch.float32)
+        complexes_coords = torch.cat([lig_coords, pocket_coords], dim=0)
         complexes_id = torch.LongTensor([0] * lig_coords.shape[0] + [1] * pocket_coords.shape[0]).to(device)
         lig_atom_type = lig_a_hidx
         pocket_atom_type = pocket_a_hidx
-        pocket_residue_type = pocket_r_hidx 
+        pocket_residue_type = pocket_r_hidx
 
-        # embedding
         complexes_id_emb = self.id_embed(complexes_id)
         lig_atom_type_emb = self.ligand_atom_type_embed(lig_atom_type)
         pocket_atom_type_emb = self.pocket_atom_type_embed(pocket_atom_type)
@@ -185,17 +185,14 @@ class PlicEncoder(nn.Module):
         pocket_type_emb = torch.cat([pocket_atom_type_emb, pocket_residue_type_emb], dim=1)
         pocket_type_emb = self.pocket_type_fusion(pocket_type_emb)
 
-        complexes_type_emb = torch.cat([lig_atom_type_emb, pocket_type_emb], dim=0) 
+        complexes_type_emb = torch.cat([lig_atom_type_emb, pocket_type_emb], dim=0)
         complexes_emb = torch.cat([complexes_type_emb, complexes_id_emb], dim=-1)
         complexes_emb = self.embed_fusion(complexes_emb)
         lig_emb, pocket_emb = complexes_emb[: num_lig], complexes_emb[num_lig:]
 
-        ligand_edge_index = get_edges(mask=lig_mask).cpu()
-        ligand_edge_index = torch.LongTensor(ligand_edge_index).to(device)
-        pocket_edge_index = get_edges(mask=pocket_mask).cpu()
-        pocket_edge_index = torch.LongTensor(pocket_edge_index).to(device)
-        complexes_edge_index = get_edges(mask=complexes_mask).cpu()
-        complexes_edge_index = torch.LongTensor(complexes_edge_index).to(device) 
+        ligand_edge_index = get_edges(lig_mask, lig_coords, self.edge_cutoff)
+        pocket_edge_index = get_edges(pocket_mask, pocket_coords, self.edge_cutoff)
+        complexes_edge_index = get_edges(complexes_mask, complexes_coords, self.edge_cutoff)
 
         pocket_distances, _ = coord2diff(pocket_coords, pocket_edge_index)
         if self.sin_embedding is not None:
@@ -214,9 +211,9 @@ class PlicEncoder(nn.Module):
                 h_lig, lig_coords= LigLayer(h_lig, lig_coords, ligand_edge_index, edge_attr=lig_distances, node_mask=None, edge_mask=None)
             H_lig = torch.cat([h_lig, lig_coords], dim=1)
             H_lig = self.H_lig_fusion(H_lig)
-        
+
         for i in range(self.EGNN_pocket_layers):
-            PocketLayer = self.EGNN_pocket_module[i]   
+            PocketLayer = self.EGNN_pocket_module[i]
             h_poc, pocket_coords = PocketLayer(h_poc, pocket_coords, pocket_edge_index, edge_attr=pocket_distances, node_mask=None, edge_mask=None)
         H_poc = torch.cat([h_poc, pocket_coords], dim=1)
         H_poc = self.H_pocket_fusion(H_poc)
@@ -229,33 +226,33 @@ class PlicEncoder(nn.Module):
         pli = self.pli_emb(pli)
         if use_raw_ligand_info:
             if sample_diffusion:
-                H_complex = torch.cat([H_lig, H_poc], dim=0)  # # (N_l + N_p, hidden_nf)
-                F = F_GAT_layer(H_complex, complexes_edge_index)  # (N_l + N_p, hidden_nf*2)
-                F = self.F_mlp(F)    # (N_l + N_p, hidden_nf)
-                zero_tensor = torch.zeros(len(lig_coords), self.hidden_nf).to(device)  # (N_l, hidden_nf)
+                H_complex = torch.cat([H_lig, H_poc], dim=0)
+                F = F_GAT_layer(H_complex, complexes_edge_index)
+                F = self.F_mlp(F)
+                zero_tensor = torch.zeros(len(lig_coords), self.hidden_nf).to(device)
                 pli = torch.cat([zero_tensor, pli], dim=0)
                 I = torch.cat([F, pli], dim=-1)
                 pli = I_GAT_layer(I, complexes_edge_index)
                 pli = pli[num_lig:]
             else:
                 if random_value < prob_if:
-                    H_complex = torch.cat([H_lig, H_poc], dim=0)  # # (N_l + N_p, hidden_nf)
-                    F = F_GAT_layer(H_complex, complexes_edge_index)  # (N_l + N_p, hidden_nf*2)
-                    F = self.F_mlp(F)    # (N_l + N_p, hidden_nf)
+                    H_complex = torch.cat([H_lig, H_poc], dim=0)
+                    F = F_GAT_layer(H_complex, complexes_edge_index)
+                    F = self.F_mlp(F)
 
-                    zero_tensor = torch.zeros(len(lig_coords), self.hidden_nf).to(device)  # (N_l, hidden_nf)
+                    zero_tensor = torch.zeros(len(lig_coords), self.hidden_nf).to(device)
                     pli = torch.cat([zero_tensor, pli], dim=0)
                     I = torch.cat([F, pli], dim=-1)
                     pli = I_GAT_layer(I, complexes_edge_index)
                     pli = pli[num_lig:]
                 else:
-                    F = F_GAT_layer(H_poc, pocket_edge_index)  # (N_p, hidden_nf*2)
-                    F = self.F_mlp(F)   # (N_p, hidden_nf)
+                    F = F_GAT_layer(H_poc, pocket_edge_index)
+                    F = self.F_mlp(F)
                     I = torch.cat([F, pli], dim=1)
                     pli = I_GAT_layer(I, pocket_edge_index)
         else:
-                F = F_GAT_layer(H_poc, pocket_edge_index)  # (N_p, hidden_nf*2)
-                F = self.F_mlp(F)   # (N_p, hidden_nf)
+                F = F_GAT_layer(H_poc, pocket_edge_index)
+                F = self.F_mlp(F)
                 I = torch.cat([F, pli], dim=1)
                 pli = I_GAT_layer(I, pocket_edge_index)
         pli = self.pli_mlp(pli)
@@ -406,4 +403,4 @@ class EquivariantBlock(nn.Module):
 
         if node_mask is not None:
             h = h * node_mask
-        return h, x 
+        return h, x

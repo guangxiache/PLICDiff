@@ -26,7 +26,6 @@ from utils.evaluation import atom_num
 from utils.runtime import load_checkpoint, project_path, validate_device
 
 
-
 def unbatch_v_traj(ligand_v_traj, n_data, ligand_cum_atoms):
     all_step_v = [[] for _ in range(n_data)]
     for v in ligand_v_traj:  # step_i
@@ -43,6 +42,8 @@ def sample_diffusion_ligand(model, data, data_raw_ligand, num_samples, batch_siz
                             use_reference_ligand_in_guidance=True):
     if num_samples <= 0 or batch_size <= 0:
         raise ValueError('num_samples and batch_size must be positive.')
+    if pos_only:
+        sample_num_atoms = 'ref'
     if (pos_only or sample_num_atoms == 'ref') and len(data.ligand_element) == 0:
         if data_raw_ligand is None:
             raise ValueError('pos_only/ref atom counts require a reference ligand.')
@@ -86,12 +87,10 @@ def sample_diffusion_ligand(model, data, data_raw_ligand, num_samples, batch_siz
             else:
                 raise ValueError
 
-            # init ligand pos
             center_pos = scatter_mean(batch.protein_pos, batch_protein, dim=0)
             batch_center_pos = center_pos[batch_ligand]
             init_ligand_pos = batch_center_pos + torch.randn_like(batch_center_pos)
 
-            # init ligand v
             if pos_only:
                 init_ligand_v = batch.ligand_atom_feature_full
             else:
@@ -120,7 +119,6 @@ def sample_diffusion_ligand(model, data, data_raw_ligand, num_samples, batch_siz
                 )
             ligand_pos, ligand_v, ligand_pos_traj, ligand_v_traj = r['pos'], r['v'], r['pos_traj'], r['v_traj']
             ligand_v0_traj, ligand_vt_traj = r['v0_traj'], r['vt_traj']
-            # unbatch pos
             ligand_cum_atoms = np.cumsum([0] + ligand_num_atoms)
             ligand_pos_array = ligand_pos.cpu().numpy().astype(np.float64)
             all_pred_pos += [ligand_pos_array[ligand_cum_atoms[k]:ligand_cum_atoms[k + 1]] for k in
@@ -135,7 +133,6 @@ def sample_diffusion_ligand(model, data, data_raw_ligand, num_samples, batch_siz
                             all_step_pos]  # num_samples * [num_steps, num_atoms_i, 3]
             all_pred_pos_traj += [p for p in all_step_pos]
 
-            # unbatch v
             ligand_v_array = ligand_v.cpu().numpy()
             all_pred_v += [ligand_v_array[ligand_cum_atoms[k]:ligand_cum_atoms[k + 1]] for k in range(n_data)]
 
@@ -179,18 +176,15 @@ if __name__ == '__main__':
 
     logger = misc.get_logger('sampling')
 
-    # Load config
     config = misc.load_config(args.config)
     if args.checkpoint:
         config.model.checkpoint = project_path(args.checkpoint)
     logger.info(config)
     misc.seed_all(config.sample.seed)
 
-    # Load checkpoint
     ckpt = load_checkpoint(args.checkpoint or config.model.checkpoint, args.device)
     logger.info(f"Training Config: {ckpt['config']}")
 
-    # Transforms
     protein_featurizer = trans.FeaturizeProteinAtom()
     ligand_atom_mode = ckpt['config'].data.transform.ligand_atom_mode
     ligand_featurizer = trans.FeaturizeLigandAtom(ligand_atom_mode)
@@ -200,7 +194,6 @@ if __name__ == '__main__':
         trans.FeaturizeLigandBond(),
     ])
 
-    # Load dataset
     ckpt['config'].data.path = project_path(args.data_path or ckpt['config'].data.path)
     ckpt['config'].data.split = project_path(args.split_path or ckpt['config'].data.split)
     dataset, subsets = get_dataset(
@@ -210,7 +203,6 @@ if __name__ == '__main__':
     train_set, test_set = subsets['train'], subsets['test']
     logger.info(f'Successfully load the dataset (size: {len(test_set)})!')
 
-    # Load model
     model = ScorePosNet3D(
         ckpt['config'].model,
         protein_atom_feature_dim=protein_featurizer.feature_dim,
@@ -228,7 +220,6 @@ if __name__ == '__main__':
     else:
         pli = None
 
-    # The dataset entry point uses stored PLI labels without reference-ligand geometry.
     all_pred_pos, all_pred_v, pred_pos_traj, pred_v_traj, pred_v0_traj, pred_vt_traj, time_list = sample_diffusion_ligand(
         model, data, data_raw_ligand=None, num_samples=config.sample.num_samples,
         batch_size=args.batch_size, device=args.device,
@@ -255,7 +246,6 @@ if __name__ == '__main__':
             'data_id': args.data_id,
             'no_pli': args.no_pli,
         },
-        # 'time': time_list
     }
     logger.info(f'Sample done! Guidance scale is pos={getattr(config.sample, "guidance_scale_pos", 3.0)}, v={getattr(config.sample, "guidance_scale_v", 3.0)}')
 

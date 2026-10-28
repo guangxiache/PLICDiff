@@ -12,7 +12,5 @@ sample:
   # For conditional-origin coefficients omega, use g = 1 + omega.
   guidance_scale_pos: 3.0
   guidance_scale_v: 3.0
-  # false: provide only PLI labels to the conditioning encoder.
-  # true: also provide the reference ligand structure to both CFG branches;
-  #       requires --reference_ligand and --raw_ligand_path.
+  # Include reference geometry in both branches with --reference_ligand --raw_ligand_path.
   guidance_use_reference_ligand: false

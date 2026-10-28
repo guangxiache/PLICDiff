@@ -2,7 +2,7 @@
 
 Evaluate **one model and one pocket per run**. Keep each pocket's protein, reference ligand,
 generated coordinates, model label and generation settings paired. Use the same protocol for
-every model. The scripts calculate metrics; they do not regenerate the paper's experiments.
+every model.
 
 ## Entrypoints
 
@@ -14,7 +14,6 @@ every model. The scripts calculate metrics; they do not regenerate the paper's e
 | Paired comparison of pocket means | `scripts/compare_pocket_metrics.py` |
 
 All CLI input/output paths are relative to the current working directory unless absolute.
-PT files contain Python objects; load only sampling outputs from trusted sources.
 The SDF entrypoint does not require PyTorch, PLIP or docking to calculate chemistry metrics.
 
 ```bash
@@ -67,10 +66,8 @@ Docking failures do not remove valid molecules from QED, SA, diversity, PLI or g
 | PLI similarity | Optional six-channel fixed-pocket cosine, over successfully analyzed valid molecules, including successful zero-contact scores. |
 | Vina Score / Vina Min | Optional raw Vina score-only / local minimization affinity, kcal/mol, **lower (more negative) is better**. Each reports its successful count. |
 
-The paper does not specify all historical diversity fingerprint parameters. The explicit
-defaults here make new calculations reproducible; they are not evidence that older diversity
-values used identical parameters. Override with `--diversity_radius`, `--diversity_bits`,
-`--diversity_chirality` and report the settings.
+Diversity settings are recorded in each summary. Adjust them with `--diversity_radius`,
+`--diversity_bits` and `--diversity_chirality`.
 
 Stability follows `utils/evaluation/analyze.py`: distances infer bond orders using its
 element-pair thresholds and margins; with `hs=False`, an atom is stable when
@@ -82,7 +79,6 @@ SDF stability uses supplied conformers after H removal; it cannot recover pre-re
 stability or failures omitted by another model. Compare the same representation across models.
 Bond and pair histograms use valid connected molecules with available coordinates; each
 distance is an observation, rather than each molecule or pocket receiving equal weight.
-These are histogram comparisons, not proofs of conformer strain, stereochemistry or activity.
 
 ## Fixed-pocket PLI
 

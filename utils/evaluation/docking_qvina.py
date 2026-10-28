@@ -7,7 +7,6 @@ from easydict import EasyDict
 from rdkit import Chem
 from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 
-from utils.reconstruct import reconstruct_from_generated
 from utils.evaluation.executables import find_executable, receptor_preparation_command
 
 
@@ -58,7 +57,6 @@ class QVinaDockingTask(BaseDockingTask):
 
     @classmethod
     def from_generated_mol(cls, ligand_rdmol, ligand_filename, protein_root='./data/crossdocked', **kwargs):
-        # load original pdb
         protein_fn = os.path.join(
             os.path.dirname(ligand_filename),
             os.path.basename(ligand_filename)[:10] + '.pdb'  # PDBId_Chain_rec.pdb
@@ -103,7 +101,6 @@ class QVinaDockingTask(BaseDockingTask):
         ligand_rdmol = Chem.AddHs(ligand_rdmol, addCoords=True)
         if use_uff:
             UFFOptimizeMolecule(ligand_rdmol)
-        # print('after uff smiles: ', Chem.MolToSmiles(ligand_rdmol))
         sdf_writer = Chem.SDWriter(self.ligand_path)
         sdf_writer.write(ligand_rdmol)
         sdf_writer.close()
@@ -126,7 +123,7 @@ class QVinaDockingTask(BaseDockingTask):
         self.error_output = None
         self.docked_sdf_path = None
 
-    def run(self, exhaustiveness=16):
+    def run(self, exhaustiveness=16, cpu=1):
         preparer = shlex.join(receptor_preparation_command())
         obabel = shlex.quote(find_executable('obabel'))
         qvina = shlex.quote(find_executable('qvina2', 'PLICDIFF_QVINA', alternatives=('qvina2.1',)))
@@ -144,6 +141,7 @@ cd {tmp}
     --center_y {center_y:.4f} \
     --center_z {center_z:.4f} \
     --size_x {size_x} --size_y {size_y} --size_z {size_z} \
+    --cpu {cpu} \
     --exhaustiveness {exhaust}
 {obabel} {ligand_id}_out.pdbqt -O{ligand_id}_out.sdf -h
         """.format(
@@ -154,6 +152,7 @@ cd {tmp}
             qvina=qvina,
             tmp=shlex.quote(self.tmp_dir),
             exhaust=exhaustiveness,
+            cpu=cpu,
             center_x=self.center[0],
             center_y=self.center[1],
             center_z=self.center[2],
@@ -176,12 +175,9 @@ cd {tmp}
         self.proc.stdin.close()
         self.proc.stdin = None
 
-        # return commands
 
-    def run_sync(self, exhaustiveness=16):
-        self.run(exhaustiveness=exhaustiveness)
-        # Drain both pipes while waiting; a busy poll can spin a CPU and deadlock
-        # when an external program fills its stdout/stderr pipe.
+    def run_sync(self, exhaustiveness=16, cpu=1):
+        self.run(exhaustiveness=exhaustiveness, cpu=cpu)
         stdout, stderr = self.proc.communicate()
         self.output = stdout.splitlines()
         self.error_output = stderr.splitlines()
@@ -203,7 +199,7 @@ cd {tmp}
                 self.error_output = self.proc.stderr.readlines()
                 try:
                     self.results = parse_qvina_outputs(self.docked_sdf_path)
-                except:
+                except Exception:
                     print('[Error] Vina output error: %s' % self.docked_sdf_path)
                     return []
             return self.results

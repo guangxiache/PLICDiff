@@ -2,15 +2,6 @@ from collections import Counter
 from scipy import spatial as sci_spatial
 import numpy as np
 
-# ATOM_TYPE_DISTRIBUTION = {
-#     6: 1585004,
-#     7: 276248,
-#     8: 400236,
-#     9: 30871,
-#     15: 26288,
-#     16: 26529,
-#     17: 15210,
-# }
 
 ATOM_TYPE_DISTRIBUTION = {
     6: 0.6715020339893559,
@@ -28,13 +19,10 @@ def eval_atom_type_distribution(pred_counter: Counter):
     if total_num_atoms == 0:
         return None
     if any(count for atom, count in pred_counter.items() if atom not in ATOM_TYPE_DISTRIBUTION):
-        # Do not silently renormalize away atoms absent from the reference support.
         return None
     pred_atom_distribution = {}
     for k in ATOM_TYPE_DISTRIBUTION:
         pred_atom_distribution[k] = pred_counter[k] / total_num_atoms
-    # print('pred atom distribution: ', pred_atom_distribution)
-    # print('ref  atom distribution: ', ATOM_TYPE_DISTRIBUTION)
     js = sci_spatial.distance.jensenshannon(np.array(list(ATOM_TYPE_DISTRIBUTION.values())),
                                             np.array(list(pred_atom_distribution.values())))
     return js

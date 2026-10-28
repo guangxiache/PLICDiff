@@ -21,8 +21,8 @@ generated ligands → molecular and interaction evaluation.
 
 ## Installation
 
-Checked on Linux x86_64 with Python 3.11, PyTorch 2.4.0, PyTorch Geometric 2.7.0,
-RDKit 2023.09.1, Open Babel 3.1 and PLIP 2.3.0. Windows and macOS have not been validated.
+Tested environment: Linux x86_64, Python 3.11, PyTorch 2.4.0, PyTorch Geometric 2.7.0,
+RDKit 2023.09.1, Open Babel 3.1 and PLIP 2.3.0.
 
 ```bash
 git clone https://github.com/guangxiache/PLICDiff.git
@@ -127,7 +127,6 @@ af9f236f683a633519c69fe04e76a1055de9fbe4d36dd8726f2b2e99c7529cf7  crossdocked_v1
 
 For pretrained generation, set `model.checkpoint` in
 [configs/sampling.yml](configs/sampling.yml), or pass `--checkpoint`.
-Checkpoints contain Python configuration objects; use a trusted source.
 The generation examples assume your own files are `inputs/protein.pdb` and
 `inputs/reference.sdf`.
 
@@ -173,9 +172,12 @@ coefficient `g=2.3`; see [Guidance convention](#guidance-convention).
 | `sampling_2.3.json` | Effective coefficients, reference-structure setting, seed and sampling parameters |
 | `sdf/<sample_index>_2.3.sdf` | Successfully reconstructed, connected molecules |
 
-The SDF count can be smaller than the number of generation attempts. Use the full
-configured diffusion chain for generation; `--num_steps` truncates it for debugging
-and does not implement accelerated sampling.
+The SDF count reflects successful, connected reconstructions. Re-running a guidance
+setting replaces its SDF outputs. Use the full configured diffusion chain for
+generation; `--num_steps` runs only its final steps for debugging.
+
+For coordinate-only sampling, set `sample.pos_only: true` and provide a reference
+ligand. This mode preserves the reference atom types and atom count.
 
 ### Other sampling inputs
 
@@ -245,7 +247,7 @@ parameters, status fields and output schemas.
 | PLI-only scoring with sampler-style filename GS grouping | [calculate_plic_similarity.py](scripts/calculate_plic_similarity.py) |
 | Paired comparison of pocket means | [compare_pocket_metrics.py](scripts/compare_pocket_metrics.py) |
 
-### PLICDiff PT outputs
+### PLICDiff PyTorch (`.pt`) outputs
 
 ```bash
 python scripts/evaluate_diffusion.py ./outputs/example \
@@ -355,6 +357,9 @@ and `data.split` in [configs/training.yml](configs/training.yml).
 Validation uses `val`; `test` is reserved for evaluation. The split must have
 nonempty `train` and `val` subsets. Use `--device cpu` for CPU execution.
 
+`sample_time_method: symmetric` is the default timestep sampler. The `importance`
+option uses a running squared-loss estimate and inverse-probability loss weights.
+
 ### Resume training
 
 Resume the model, optimizer and scheduler together:
@@ -419,11 +424,7 @@ requirements.txt            Core Python dependencies
 requirements-docking.txt    Optional Vina dependencies
 ```
 
-Small workflow checks covered CPU/GPU execution, training/resume, short-chain
-sampling, fixed-pocket PLI, SDF/PT evaluation and Vina score/minimization.
-They are separate from full training and reproduction of the paper's experiments.
-The public source package excludes data, weights, generated molecules, paper drafts
-and local test/analysis outputs.
+Download data and pretrained weights separately using the links above.
 
 ## Acknowledgments and license
 
@@ -432,5 +433,8 @@ PLICDiff builds on [TargetDiff](https://github.com/guanjq/targetdiff) and uses
 [RDKit](https://www.rdkit.org/), [Open Babel](https://openbabel.org/) and
 [PLIP](https://github.com/pharmai/plip).
 
-See [LICENSE](LICENSE), the [TargetDiff license](third_party/TargetDiff_LICENSE),
-and the copyright notices retained in the source files.
+License texts: [PLICDiff](LICENSE), [TargetDiff](third_party/TargetDiff_LICENSE),
+and [LiGAN](third_party/LiGAN_LICENSE). The reconstruction module contains
+LiGAN-derived code under GPLv2; its source notice is retained in
+[reconstruct.py](utils/reconstruct.py). Other third-party notices remain in the
+corresponding source files.

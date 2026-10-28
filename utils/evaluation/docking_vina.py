@@ -11,7 +11,6 @@ import contextlib
 import sys
 from pathlib import Path
 
-from utils.reconstruct import reconstruct_from_generated
 from utils.evaluation.docking_qvina import get_random_id, BaseDockingTask
 from utils.evaluation.executables import receptor_preparation_command
 
@@ -28,12 +27,12 @@ class PrepLig(object):
     def __init__(self, input_mol, mol_format):
         if mol_format == 'smi':
             self.ob_mol = pybel.readstring('smi', input_mol)
-        elif mol_format == 'sdf': 
+        elif mol_format == 'sdf':
             self.ob_mol = next(pybel.readfile(mol_format, input_mol))
         else:
             raise ValueError(f'mol_format {mol_format} not supported')
-        
-    def addH(self, polaronly=False, correctforph=True, PH=7): 
+
+    def addH(self, polaronly=False, correctforph=True, PH=7):
         self.ob_mol.OBMol.AddHydrogens(polaronly, correctforph, PH)
 
     def gen_conf(self):
@@ -57,30 +56,28 @@ class PrepLig(object):
         else:
             preparator.prepare(self.ob_mol.OBMol)
             pdbqt = preparator.write_pdbqt_string()
-        if lig_pdbqt is not None: 
+        if lig_pdbqt is not None:
             Path(lig_pdbqt).write_text(pdbqt)
-            return 
-        else: 
+            return
+        else:
             return pdbqt
-        
 
-class PrepProt(object): 
-    def __init__(self, pdb_file): 
+
+class PrepProt(object):
+    def __init__(self, pdb_file):
         self.prot = pdb_file
-    
-    def del_water(self, dry_pdb_file): # optional
-        with open(self.prot) as f: 
-            lines = [l for l in f.readlines() if l.startswith('ATOM') or l.startswith('HETATM')] 
+
+    def del_water(self, dry_pdb_file):
+        with open(self.prot) as f:
+            lines = [l for l in f.readlines() if l.startswith('ATOM') or l.startswith('HETATM')]
             dry_lines = [l for l in lines if not 'HOH' in l]
-        
+
         with open(dry_pdb_file, 'w') as f:
             f.write(''.join(dry_lines))
         self.prot = dry_pdb_file
-        
-    def addH(self, prot_pqr):  # call pdb2pqr
+
+    def addH(self, prot_pqr):
         self.prot_pqr = prot_pqr
-        # subprocess.Popen(['pdb2pqr30','--ff=AMBER',self.prot, self.prot_pqr],
-        #                  stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL).communicate()
         subprocess.run([
                         sys.executable, '-m', 'pdb2pqr',
                         '--ff=AMBER',
@@ -96,13 +93,13 @@ class PrepProt(object):
             raise RuntimeError('Receptor preparation did not produce a PDBQT file.')
 
 
-class VinaDock(object): 
-    def __init__(self, lig_pdbqt, prot_pdbqt): 
+class VinaDock(object):
+    def __init__(self, lig_pdbqt, prot_pdbqt):
         self.lig_pdbqt = lig_pdbqt
         self.prot_pdbqt = prot_pdbqt
-    
+
     def _max_min_pdb(self, pdb, buffer):
-        with open(pdb, 'r') as f: 
+        with open(pdb, 'r') as f:
             lines = [l for l in f.readlines() if l.startswith('ATOM') or l.startswith('HETATM')]
             xs = [float(l[30:38]) for l in lines]
             ys = [float(l[38:46]) for l in lines]
@@ -113,18 +110,10 @@ class VinaDock(object):
             pocket_center = [(max(xs) + min(xs))/2, (max(ys) + min(ys))/2, (max(zs) + min(zs))/2]
             box_size = [(max(xs) - min(xs)) + buffer, (max(ys) - min(ys)) + buffer, (max(zs) - min(zs)) + buffer]
             return pocket_center, box_size
-    
-    def get_box(self, ref=None, buffer=0):
-        '''
-        ref: reference pdb to define pocket. 
-        buffer: buffer size to add 
 
-        if ref is not None: 
-            get the max and min on x, y, z axis in ref pdb and add buffer to each dimension 
-        else: 
-            use the entire protein to define pocket 
-        '''
-        if ref is None: 
+    def get_box(self, ref=None, buffer=0):
+        '''Set a bounding box from ref, or from the receptor, with the given buffer.'''
+        if ref is None:
             ref = self.prot_pdbqt
         self.pocket_center, self.box_size = self._max_min_pdb(ref, buffer)
         print(self.pocket_center, self.box_size)
@@ -134,7 +123,7 @@ class VinaDock(object):
         v.set_receptor(self.prot_pdbqt)
         v.set_ligand_from_file(self.lig_pdbqt)
         v.compute_vina_maps(center=self.pocket_center, box_size=self.box_size)
-        if mode == 'score_only': 
+        if mode == 'score_only':
             score = v.score()[0]
         elif mode == 'minimize':
             score = v.optimize()[0]
@@ -143,20 +132,20 @@ class VinaDock(object):
             score = v.energies(n_poses=1)[0][0]
         else:
             raise ValueError
-        
-        if not save_pose: 
+
+        if not save_pose:
             return score
-        else: 
-            if mode == 'score_only': 
-                pose = None 
-            elif mode == 'minimize': 
+        else:
+            if mode == 'score_only':
+                pose = None
+            elif mode == 'minimize':
                 tmp = tempfile.NamedTemporaryFile()
-                with open(tmp.name, 'w') as f: 
-                    v.write_pose(tmp.name, overwrite=True)             
-                with open(tmp.name, 'r') as f: 
+                with open(tmp.name, 'w') as f:
+                    v.write_pose(tmp.name, overwrite=True)
+                with open(tmp.name, 'r') as f:
                     pose = f.read()
-   
-            elif mode == 'dock': 
+
+            elif mode == 'dock':
                 pose = v.poses(n_poses=1)
             else:
                 raise ValueError
@@ -181,12 +170,6 @@ class VinaDockingTask(BaseDockingTask):
 
     @classmethod
     def from_generated_mol(cls, ligand_rdmol, ligand_filename, protein_root='./data/crossdocked', **kwargs):
-        # load original pdb
-        # protein_fn = os.path.join(
-        #     os.path.dirname(ligand_filename),
-        #     os.path.basename(ligand_filename)[:10] + '.pdb'  # PDBId_Chain_rec.pdb
-        # )
-        # protein_path = os.path.join(protein_root, protein_fn)
         if Path(protein_root).is_dir():
             protein_fn = os.path.join(os.path.dirname(ligand_filename),
                                       os.path.basename(ligand_filename)[:10] + '.pdb')
@@ -199,7 +182,6 @@ class VinaDockingTask(BaseDockingTask):
     def __init__(self, protein_path, ligand_rdmol, tmp_dir='./tmp', center=None,
                  size_factor=1., buffer=5.0):
         super().__init__(protein_path, ligand_rdmol)
-        # self.conda_env = conda_env
         self.tmp_dir = os.path.realpath(tmp_dir)
         os.makedirs(tmp_dir, exist_ok=True)
 
@@ -215,7 +197,7 @@ class VinaDockingTask(BaseDockingTask):
         self.recon_ligand_mol = ligand_rdmol
         ligand_rdmol = Chem.AddHs(ligand_rdmol, addCoords=True)
 
-        sdf_writer = Chem.SDWriter(self.ligand_path)  
+        sdf_writer = Chem.SDWriter(self.ligand_path)
         sdf_writer.write(ligand_rdmol)
         sdf_writer.close()
         self.ligand_rdmol = ligand_rdmol
@@ -258,28 +240,3 @@ class VinaDockingTask(BaseDockingTask):
         dock.pocket_center, dock.box_size = self.center, [self.size_x, self.size_y, self.size_z]
         score, pose = dock.dock(score_func='vina', mode=mode, exhaustiveness=exhaustiveness, save_pose=True, **kwargs)
         return [{'affinity': score, 'pose': pose}]
-
-
-# if __name__ == '__main__':
-#     lig_pdbqt = 'data/lig.pdbqt'
-#     mol_file = 'data/1a4k_ligand.sdf'
-#     a = PrepLig(mol_file, 'sdf')
-#     # mol_file = 'CC(=C)C(=O)OCCN(C)C'
-#     # a = PrepLig(mol_file, 'smi')
-#     a.addH()
-#     a.gen_conf()
-#     a.get_pdbqt(lig_pdbqt)
-#
-#     prot_file = 'data/1a4k_protein_chainAB.pdb'
-#     prot_dry = 'data/protein_dry.pdb'
-#     prot_pqr = 'data/protein.pqr'
-#     prot_pdbqt = 'data/protein.pdbqt'
-#     b = PrepProt(prot_file)
-#     b.del_water(prot_dry)
-#     b.addH(prot_pqr)
-#     b.get_pdbqt(prot_pdbqt)
-#
-#     dock = VinaDock(lig_pdbqt, prot_pdbqt)
-#     dock.get_box()
-#     dock.dock()
-    

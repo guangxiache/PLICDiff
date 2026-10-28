@@ -8,8 +8,6 @@ if str(ROOT_DIR) not in sys.path:
 import os
 import torch
 from tqdm.auto import tqdm
-from utils.evaluation.docking_qvina import QVinaDockingTask
-from utils.evaluation.docking_vina import VinaDockingTask
 import multiprocessing as mp
 
 
@@ -22,14 +20,20 @@ def dock_pocket_samples(pocket_samples, args):
     for idx, s in enumerate(tqdm(pocket_samples, desc='docking %d' % os.getpid())):
         try:
             if args.docking_mode == 'qvina':
+                from utils.evaluation.docking_qvina import QVinaDockingTask
+
                 vina_task = QVinaDockingTask.from_generated_mol(
                     s['mol'], s['ligand_filename'], protein_root=args.protein_root, size_factor=args.dock_size_factor)
-                vina_results = vina_task.run_sync()
+                vina_results = vina_task.run_sync(exhaustiveness=args.exhaustiveness, cpu=args.docking_cpu)
             elif args.docking_mode == 'vina_score':
+                from utils.evaluation.docking_vina import VinaDockingTask
+
                 vina_task = VinaDockingTask.from_generated_mol(
                     s['mol'], s['ligand_filename'], protein_root=args.protein_root)
-                score_only_results = vina_task.run(mode='score_only', exhaustiveness=args.exhaustiveness)
-                minimize_results = vina_task.run(mode='minimize', exhaustiveness=args.exhaustiveness)
+                score_only_results = vina_task.run(mode='score_only', exhaustiveness=args.exhaustiveness,
+                                                   cpu=args.docking_cpu)
+                minimize_results = vina_task.run(mode='minimize', exhaustiveness=args.exhaustiveness,
+                                                cpu=args.docking_cpu)
                 vina_results = {
                     'score_only': score_only_results,
                     'minimize': minimize_results
@@ -38,8 +42,8 @@ def dock_pocket_samples(pocket_samples, args):
                 vina_results = None
             else:
                 raise ValueError
-        except:
-            print('Error at %d of %s' % (idx, ligand_fn))
+        except Exception as error:
+            print('Error at %d of %s: %s' % (idx, ligand_fn, error))
             vina_results = None
         pocket_results.append({**s, 'vina': vina_results})
     return pocket_results
@@ -50,12 +54,15 @@ if __name__ == '__main__':
     parser.add_argument('sample_path', type=str)
     parser.add_argument('-o', '--out', type=str, default=None)
     parser.add_argument('-n', '--num_processes', type=int, default=10)
-    parser.add_argument('--protein_root', type=str, default='./data/crossdocked_v1.1_rmsd1.0')
+    parser.add_argument('--protein_root', type=str, default='./data/crossdocked_v1.3_rmsd1.0')
     parser.add_argument('--dock_size_factor', type=float, default=None)
     parser.add_argument('--exhaustiveness', type=int, default=16)
+    parser.add_argument('--docking_cpu', type=int, default=1)
     parser.add_argument('--docking_mode', type=str, default='vina_score',
                         choices=['none', 'qvina', 'vina_score'])
     args = parser.parse_args()
+    if min(args.num_processes, args.exhaustiveness, args.docking_cpu) < 1:
+        parser.error('Process count, docking CPU and exhaustiveness must be positive')
 
     samples = torch.load(args.sample_path, map_location='cpu', weights_only=False)
     with mp.Pool(args.num_processes) as p:

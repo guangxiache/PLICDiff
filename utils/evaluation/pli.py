@@ -33,7 +33,6 @@ class FixedPocketPLI:
             raise ValueError('Reference has no interactions; PLI cosine is not informative')
 
     def score_file(self, ligand_path):
-        # Never crop around a generated ligand; rows must match the reference pocket.
         profile = self.plic.pli_processor(str(ligand_path), self.pocket_path, already_cropped=True)
         if profile is None:
             raise ValueError('PLIP/ligand parsing failed')

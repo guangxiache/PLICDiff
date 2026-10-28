@@ -15,14 +15,7 @@ BondLengthProfile = Dict[BondType, np.ndarray]  # bond_type -> empirical distrib
 
 
 def get_distribution(distances: Sequence[float], bins=eval_bond_length_config.DISTANCE_BINS) -> np.ndarray:
-    """Get the distribution of distances.
-
-    Args:
-        distances (list): List of distances.
-        bins (list): bins of distances
-    Returns:
-        np.array: empirical distribution of distances with length equals to DISTANCE_BINS.
-    """
+    """Bin distances, including underflow and overflow; normalize nonempty counts."""
     bin_counts = collections.Counter(np.searchsorted(bins, distances))
     bin_counts = [bin_counts[i] if i in bin_counts else 0 for i in range(len(bins) + 1)]
     bin_counts = np.array(bin_counts, dtype=float)
@@ -55,7 +48,6 @@ def _bond_type_str(bond_type: BondType) -> str:
 def eval_bond_length_profile(bond_length_profile: BondLengthProfile) -> Dict[str, Optional[float]]:
     metrics = {}
 
-    # Jensen-Shannon distances
     for bond_type, gt_distribution in eval_bond_length_config.EMPIRICAL_DISTRIBUTIONS.items():
         if bond_type not in bond_length_profile:
             metrics[f'JSD_{_bond_type_str(bond_type)}'] = None
@@ -88,7 +80,6 @@ def eval_pair_length_profile(pair_length_profile):
 
 
 def plot_distance_hist(pair_length_profile, metrics=None, save_path=None):
-    # Chemistry-only imports must not initialize a GUI backend.
     import matplotlib.pyplot as plt
 
     gt_profile = eval_bond_length_config.PAIR_EMPIRICAL_DISTRIBUTIONS

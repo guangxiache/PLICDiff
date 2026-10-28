@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Extract a protein-ligand interaction profile from a (ligand, protein) pair and save it as .npy.
-
-The 7-channel one-hot profile per pocket atom is the conditioning input used at sampling time.
-Usage:
-    python scripts/extract_pli_profile.py \
-        --ligand <reference_ligand.sdf> --protein <protein.pdb> \
-        --out_dir <output_dir>
-Outputs:
-    <out_dir>/pli_profile.npy   # (n_pocket_atoms, 7) float32
-    <out_dir>/pocket.pdb        # pocket with atom order matching the profile
-Channel order: pipi, anion, cation, hbd, hba, hydro, none
-"""
+"""Export pocket.pdb and its aligned seven-channel pli_profile.npy."""
 import argparse
 import os
-import shutil
 import sys
 
 import numpy as np
@@ -22,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from datasets.extract_PLIC import PLIC  # noqa: E402
+from datasets.extract_PLIC import PLIC
 
 INTERACTION_TYPES = ['pipi', 'anion', 'cation', 'hbd', 'hba', 'hydro', 'none']
 
@@ -42,13 +30,12 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     pocket_out = os.path.join(args.out_dir, 'pocket.pdb')
     plic = PLIC()
-    pli, pocket_path = plic.pli_processor(
+    pli, _ = plic.pli_processor(
         args.ligand, args.protein, already_cropped=False, return_pocket=True,
         cutoff=args.cutoff, pocket_output=pocket_out)
     if pli is None:
         sys.exit('Profile extraction failed (pli_processor returned None); check the ligand and protein files')
 
-    os.makedirs(args.out_dir, exist_ok=True)
     npy_path = os.path.join(args.out_dir, 'pli_profile.npy')
     np.save(npy_path, np.asarray(pli, dtype=np.float32))
 

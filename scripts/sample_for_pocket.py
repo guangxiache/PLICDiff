@@ -48,6 +48,19 @@ def raw_ligand_data(raw_ligand_path):
     return data
 
 
+def save_molecules(molecules, output_dir, guidance_scale):
+    """Replace the SDF outputs for one guidance setting."""
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    suffix = f'_{guidance_scale}'
+    for path in directory.glob(f'*{suffix}.sdf'):
+        if path.stem.removesuffix(suffix).isdigit():
+            path.unlink()
+    for idx, mol in enumerate(molecules):
+        if mol is not None:
+            with Chem.SDWriter(str(directory / f'{idx:03d}{suffix}.sdf')) as writer:
+                writer.write(mol)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -82,18 +95,15 @@ if __name__ == '__main__':
 
     logger = misc.get_logger('evaluate')
 
-    # Load config
     config = misc.load_config(args.config)
     if args.checkpoint:
         config.model.checkpoint = project_path(args.checkpoint)
     logger.info(config)
     misc.seed_all(config.sample.seed)
 
-    # Load checkpoint
     ckpt = load_checkpoint(args.checkpoint or config.model.checkpoint, args.device)
     logger.info(f"Training Config: {ckpt['config']}")
 
-    # Transforms
     protein_featurizer = trans.FeaturizeProteinAtom()
     ligand_atom_mode = ckpt['config'].data.transform.ligand_atom_mode
     ligand_featurizer = trans.FeaturizeLigandAtom(ligand_atom_mode)
@@ -103,9 +113,8 @@ if __name__ == '__main__':
         ])
 
     transform = Compose([
-        protein_featurizer, 
+        protein_featurizer,
     ])
-    # Load model
     model = ScorePosNet3D(
         ckpt['config'].model,
         protein_atom_feature_dim=protein_featurizer.feature_dim,
@@ -127,7 +136,7 @@ if __name__ == '__main__':
         )
         if pli is None:
             raise RuntimeError('PLI extraction failed; inspect the reported protein/ligand error.')
-        pli = torch.from_numpy(pli).to(torch.float32) 
+        pli = torch.from_numpy(pli).to(torch.float32)
     elif args.pli_path:
         pli = torch.from_numpy(np.load(args.pli_path)).to(torch.float32)
         pocket_path = args.pdb_path
@@ -137,7 +146,6 @@ if __name__ == '__main__':
         pocket_path = args.pdb_path
 
 
-    # Load pocket
     data = pdb_to_pocket_data(pocket_path)
     data = transform(data)
     if pli is not None and (pli.ndim != 2 or pli.shape != (len(data.protein_pos), 7)):
@@ -150,7 +158,6 @@ if __name__ == '__main__':
     if pli is not None:
         pli = pli.to(args.device)
 
-    # load raw ligand if reference_ligand is True
     if args.reference_ligand:
         data_raw_ligand = raw_ligand_data(args.raw_ligand_path)
         data_raw_ligand = transform_raw_ligand(data_raw_ligand)
@@ -161,6 +168,8 @@ if __name__ == '__main__':
         config.sample.num_samples = args.num_samples
     if args.num_steps is not None:
         config.sample.num_steps = args.num_steps
+    if config.sample.pos_only:
+        config.sample.sample_num_atoms = 'ref'
     default_pos = float(config.sample.get('guidance_scale_pos', 1.3))
     default_v = float(config.sample.get('guidance_scale_v', 1.3))
     if args.guidance_scale is not None:
@@ -177,8 +186,8 @@ if __name__ == '__main__':
     result_path = args.result_path
     os.makedirs(result_path, exist_ok=True)
     shutil.copyfile(args.config, os.path.join(result_path, 'sample.yml'))
-    mols_save_path = os.path.join(result_path, f'sdf')
-    
+    mols_save_path = os.path.join(result_path, 'sdf')
+
     for guidance_scale_pos, guidance_scale_v in guidance_pairs:
         guidance_scale = (str(guidance_scale_pos) if guidance_scale_pos == guidance_scale_v
                           else f'pos{guidance_scale_pos}_v{guidance_scale_v}')
@@ -218,7 +227,6 @@ if __name__ == '__main__':
         logger.info(f'Sample done! Guidance scale is {guidance_scale} '
                     f'(use_reference_ligand_in_guidance={use_reference})')
 
-        # reconstruction
         gen_mols = []
         n_recon_success, n_complete = 0, 0
         for sample_idx, (pred_pos, pred_v) in enumerate(zip(all_pred_pos, all_pred_v)):
@@ -227,7 +235,8 @@ if __name__ == '__main__':
                 pred_aromatic = trans.is_aromatic_from_index(pred_v, mode=ligand_atom_mode)
                 mol = reconstruct.reconstruct_from_generated(pred_pos, pred_atom_type, pred_aromatic)
                 smiles = Chem.MolToSmiles(mol)
-            except reconstruct.MolReconsError:
+            except Exception as error:
+                logger.debug('Reconstruction failed for sample %d: %s', sample_idx, error)
                 gen_mols.append(None)
                 continue
             n_recon_success += 1
@@ -246,10 +255,5 @@ if __name__ == '__main__':
         with open(os.path.join(result_path, f'sampling_{guidance_scale}.json'), 'w') as f:
             json.dump(result['sampling_metadata'], f, indent=2)
 
-        os.makedirs(mols_save_path, exist_ok=True)
-        for idx, mol in enumerate(gen_mols):
-            if mol is not None:
-                sdf_writer = Chem.SDWriter(os.path.join(mols_save_path, f'{idx:03d}'+'_'+f'{guidance_scale}.sdf'))
-                sdf_writer.write(mol)
-                sdf_writer.close()
+        save_molecules(gen_mols, mols_save_path, guidance_scale)
     logger.info(f'Results are saved in {result_path}')

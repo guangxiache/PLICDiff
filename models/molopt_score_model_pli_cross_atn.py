@@ -39,6 +39,7 @@ def get_refine_net(refine_net_type, config):
             edge_feat_dim=config.edge_feat_dim,
             num_r_gaussian=1,
             k=config.knn,
+            cutoff=config.r_max,
             cutoff_mode=config.cutoff_mode
         )
     else:
@@ -116,12 +117,9 @@ def center_pos(protein_pos, ligand_pos, batch_protein, batch_ligand, mode='prote
     return protein_pos, ligand_pos, offset
 
 
-# %% categorical diffusion related
 def index_to_log_onehot(x, num_classes):
     assert x.max().item() < num_classes, f'Error: {x.max().item()} >= {num_classes}'
     x_onehot = F.one_hot(x, num_classes)
-    # permute_order = (0, -1) + tuple(range(1, len(x.size())))
-    # x_onehot = x_onehot.permute(permute_order)
     log_x = torch.log(x_onehot.float().clamp(min=1e-30))
     return log_x
 
@@ -155,8 +153,6 @@ def log_sample_categorical(logits):
     sample_index = (gumbel_noise + logits).argmax(dim=-1)
 
 
-    # sample_onehot = F.one_hot(sample, self.num_classes)
-    # log_sample = index_to_log_onehot(sample, self.num_classes)
     return sample_index
 
 
@@ -169,10 +165,6 @@ def log_add_exp(a, b):
     return maximum + torch.log(torch.exp(a - maximum) + torch.exp(b - maximum))
 
 
-# %%
-
-
-# Time embedding
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -180,41 +172,27 @@ class SinusoidalPosEmb(nn.Module):
 
     def forward(self, x):
         device = x.device
-        half_dim = self.dim // 2
-        emb = np.log(10000) / (half_dim - 1)
+        half_dim = (self.dim + 1) // 2
+        emb = np.log(10000) / max(half_dim - 1, 1)
         emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
         emb = x[:, None] * emb[None, :]
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
+        return emb[:, :self.dim]
 
 
-# Model
 class ScorePosNet3D(nn.Module):
 
     def __init__(self, config, protein_atom_feature_dim, ligand_atom_feature_dim):
         super().__init__()
         self.config = config
 
-        # variance schedule
-        self.model_mean_type = config.model_mean_type  # ['noise', 'C0']
+        self.model_mean_type = config.model_mean_type
         self.loss_v_weight = config.loss_v_weight
-        # self.v_mode = config.v_mode
-        # assert self.v_mode == 'categorical'
-        # self.v_net_type = getattr(config, 'v_net_type', 'mlp')
-        # self.bond_loss = getattr(config, 'bond_loss', False)
-        # self.bond_net_type = getattr(config, 'bond_net_type', 'pre_att')
-        # self.loss_bond_weight = getattr(config, 'loss_bond_weight', 0.)
-        # self.loss_non_bond_weight = getattr(config, 'loss_non_bond_weight', 0.)
 
-        self.sample_time_method = config.sample_time_method  # ['importance', 'symmetric']
-        # self.loss_pos_type = config.loss_pos_type  # ['mse', 'kl']
-        # print(f'Loss pos mode {self.loss_pos_type} applied!')
-        # print(f'Loss bond net type: {self.bond_net_type} '
-        #       f'bond weight: {self.loss_bond_weight} non bond weight: {self.loss_non_bond_weight}')
+        self.sample_time_method = config.sample_time_method
 
         if config.beta_schedule == 'cosine':
             alphas = cosine_beta_schedule(config.num_diffusion_timesteps, config.pos_beta_s) ** 2
-            # print('cosine pos alpha schedule applied!')
             betas = 1. - alphas
         else:
             betas = get_beta_schedule(
@@ -250,7 +228,6 @@ class ScorePosNet3D(nn.Module):
         # atom type diffusion schedule in log space
         if config.v_beta_schedule == 'cosine':
             alphas_v = cosine_beta_schedule(self.num_timesteps, config.v_beta_s)
-            # print('cosine v alpha schedule applied!')
         else:
             raise NotImplementedError
         log_alphas_v = np.log(alphas_v)
@@ -263,7 +240,6 @@ class ScorePosNet3D(nn.Module):
         self.register_buffer('Lt_history', torch.zeros(self.num_timesteps))
         self.register_buffer('Lt_count', torch.zeros(self.num_timesteps))
 
-        # model definition
         self.hidden_dim = config.hidden_dim
         self.num_classes = ligand_atom_feature_dim
         if self.config.node_indicator:
@@ -271,16 +247,12 @@ class ScorePosNet3D(nn.Module):
         else:
             emb_dim = self.hidden_dim
 
-        # atom embedding
         self.protein_atom_emb = nn.Linear(protein_atom_feature_dim, emb_dim)
-        # pli embedding
-        self.pli_encoder = PlicEncoder()
+        self.pli_encoder = PlicEncoder(num_ligand_types=max(13, self.num_classes))
         self.pli_fusion = nn.Linear(emb_dim + self.pli_encoder.hidden_nf, emb_dim)
 
-        # center pos
-        self.center_pos_mode = config.center_pos_mode  # ['none', 'protein']
+        self.center_pos_mode = config.center_pos_mode
 
-        # time embedding
         self.time_emb_dim = config.time_emb_dim
         self.time_emb_mode = config.time_emb_mode
         if self.time_emb_dim > 0:
@@ -313,7 +285,6 @@ class ScorePosNet3D(nn.Module):
         batch_size = batch_protein.max().item() + 1
 
         init_ligand_v = F.one_hot(init_ligand_v, self.num_classes).float()
-        # time embedding
         if self.time_emb_dim > 0:
             if self.time_emb_mode == 'simple':
                 input_ligand_feat = torch.cat([
@@ -321,7 +292,7 @@ class ScorePosNet3D(nn.Module):
                     (time_step / self.num_timesteps)[batch_ligand].unsqueeze(-1)
                 ], -1)
             elif self.time_emb_mode == 'sin':
-                time_feat = self.time_emb(time_step)
+                time_feat = self.time_emb(time_step)[batch_ligand]
                 input_ligand_feat = torch.cat([init_ligand_v, time_feat], -1)
             else:
                 raise NotImplementedError
@@ -345,7 +316,7 @@ class ScorePosNet3D(nn.Module):
         h_protein_cat = torch.cat([h_protein, pli_emb],dim=-1)
         h_protein_fusion = self.pli_fusion(h_protein_cat)
         h_protein = h_protein_fusion
-        
+
         init_ligand_h = self.ligand_atom_emb(input_ligand_feat)
 
         if self.config.node_indicator:
@@ -389,11 +360,10 @@ class ScorePosNet3D(nn.Module):
                 'layer_pred_ligand_pos': final_all_ligand_pos,
                 'layer_pred_ligand_v': final_all_ligand_v
             })
-        
+
 
         return preds, info_for_aligning
 
-    # atom type diffusion process
     def q_v_pred_one_timestep(self, log_vt_1, t, batch):
         # q(vt | vt-1)
         log_alpha_t = extract(self.log_alphas_v, t, batch)
@@ -423,11 +393,9 @@ class ScorePosNet3D(nn.Module):
         log_sample = index_to_log_onehot(sample_index, self.num_classes)
         return sample_index, log_sample
 
-    # atom type generative process
     def q_v_posterior(self, log_v0, log_vt, t, batch):
         # q(vt-1 | vt, v0) = q(vt | vt-1, x0) * q(vt-1 | x0) / q(vt | x0)
         t_minus_1 = t - 1
-        # Remove negative values, will not be used anyway for final decoder
         t_minus_1 = torch.where(t_minus_1 < 0, torch.zeros_like(t_minus_1), t_minus_1)
         log_qvt1_v0 = self.q_v_pred(log_v0, t_minus_1, batch)
         unnormed_logprobs = log_qvt1_v0 + self.q_v_pred_one_timestep(log_vt, t, batch)
@@ -457,9 +425,9 @@ class ScorePosNet3D(nn.Module):
         num_graphs = batch.max().item() + 1
         a_pos = extract(self.alphas_cumprod, [self.num_timesteps - 1] * num_graphs, batch)  # (num_ligand_atoms, 1)
         pos_model_mean = a_pos.sqrt() * pos0
-        pos_log_variance = torch.log((1.0 - a_pos).sqrt())
-        kl_prior = normal_kl(torch.zeros_like(pos_model_mean), torch.zeros_like(pos_log_variance),
-                             pos_model_mean, pos_log_variance)
+        pos_log_variance = torch.log(1.0 - a_pos)
+        kl_prior = normal_kl(pos_model_mean, pos_log_variance,
+                             torch.zeros_like(pos_model_mean), torch.zeros_like(pos_log_variance))
         kl_prior = scatter_mean(kl_prior, batch, dim=0)
         return kl_prior
 
@@ -488,7 +456,6 @@ class ScorePosNet3D(nn.Module):
             raise ValueError
 
     def compute_pos_Lt(self, pos_model_mean, x0, xt, t, batch):
-        # fixed pos variance
         pos_log_variance = extract(self.posterior_logvar, t, batch)
         pos_true_mean = self.q_pos_posterior(x0=x0, xt=xt, t=t, batch=batch)
         kl_pos = normal_kl(pos_true_mean, pos_log_variance, pos_model_mean, pos_log_variance)
@@ -515,14 +482,13 @@ class ScorePosNet3D(nn.Module):
         protein_pos, ligand_pos, _ = center_pos(
             protein_pos, ligand_pos, batch_protein, batch_ligand, mode=self.center_pos_mode)
 
-        # 1. sample noise levels
-        if time_step is None:
+        sampled_time = time_step is None
+        if sampled_time:
             time_step, pt = self.sample_time(num_graphs, protein_pos.device, self.sample_time_method)
         else:
-            pt = torch.ones_like(time_step).float() / self.num_timesteps
+            pt = torch.full_like(time_step, 1. / self.num_timesteps, dtype=protein_pos.dtype)
         a = self.alphas_cumprod.index_select(0, time_step)
 
-        # 2. perturb pos and v
         a_pos = a[batch_ligand].unsqueeze(-1)
         pos_noise = torch.zeros_like(ligand_pos)
         pos_noise.normal_()
@@ -532,7 +498,6 @@ class ScorePosNet3D(nn.Module):
         log_ligand_v0 = index_to_log_onehot(ligand_v, self.num_classes)
         ligand_v_perturbed, log_ligand_vt = self.q_v_sample(log_ligand_v0, time_step, batch_ligand)
 
-        # 3. forward-pass NN, feed perturbed pos and v, output noise
         preds, _ = self(
             protein_pos=protein_pos,
             protein_v=protein_v,
@@ -551,19 +516,6 @@ class ScorePosNet3D(nn.Module):
 
         pred_ligand_pos, pred_ligand_v = preds['pred_ligand_pos'], preds['pred_ligand_v']
         pred_pos_noise = pred_ligand_pos - ligand_pos_perturbed
-        # atom position
-        if self.model_mean_type == 'noise':
-            pos0_from_e = self._predict_x0_from_eps(
-                xt=ligand_pos_perturbed, eps=pred_pos_noise, t=time_step, batch=batch_ligand)
-            pos_model_mean = self.q_pos_posterior(
-                x0=pos0_from_e, xt=ligand_pos_perturbed, t=time_step, batch=batch_ligand)
-        elif self.model_mean_type == 'C0':
-            pos_model_mean = self.q_pos_posterior(
-                x0=pred_ligand_pos, xt=ligand_pos_perturbed, t=time_step, batch=batch_ligand)
-        else:
-            raise ValueError
-
-        # atom pos loss
         if self.model_mean_type == 'C0':
             target, pred = ligand_pos, pred_ligand_pos
         elif self.model_mean_type == 'noise':
@@ -571,22 +523,29 @@ class ScorePosNet3D(nn.Module):
         else:
             raise ValueError
         loss_pos = scatter_mean(((pred - target) ** 2).sum(-1), batch_ligand, dim=0)
-        loss_pos = torch.mean(loss_pos)
 
-        # atom type loss
         log_ligand_v_recon = F.log_softmax(pred_ligand_v, dim=-1)
         log_v_model_prob = self.q_v_posterior(log_ligand_v_recon, log_ligand_vt, time_step, batch_ligand)
         log_v_true_prob = self.q_v_posterior(log_ligand_v0, log_ligand_vt, time_step, batch_ligand)
         kl_v = self.compute_v_Lt(log_v_model_prob=log_v_model_prob, log_v0=log_ligand_v0,
                                  log_v_true_prob=log_v_true_prob, t=time_step, batch=batch_ligand)
-        loss_v = torch.mean(kl_v)
+        if self.training and sampled_time and self.sample_time_method == 'importance':
+            with torch.no_grad():
+                squared_loss = (loss_pos + self.loss_v_weight * kl_v).detach().square()
+                for step in time_step.unique():
+                    values = squared_loss[time_step == step]
+                    self.Lt_history[step] = .9 * self.Lt_history[step] + .1 * values.mean()
+                    self.Lt_count[step] += len(values)
+        weights = 1. / (self.num_timesteps * pt)
+        loss_pos = (loss_pos * weights).mean()
+        loss_v = (kl_v * weights).mean()
         loss = loss_pos + loss_v * self.loss_v_weight
 
         return {
             'loss_pos': loss_pos,
             'loss_v': loss_v,
             'loss': loss,
-            'x0': ligand_pos,  
+            'x0': ligand_pos,
             'pred_ligand_pos': pred_ligand_pos,
             'pred_ligand_v': pred_ligand_v,
             'pred_pos_noise': pred_pos_noise,
@@ -623,7 +582,6 @@ class ScorePosNet3D(nn.Module):
         v0_pred_traj, vt_pred_traj = [], []
         ligand_pos_sampled, ligand_v_sampled = init_ligand_pos, init_ligand_v
 
-        # time sequence
         time_seq = list(reversed(range(self.num_timesteps - num_steps, self.num_timesteps)))
 
         pli_uncond = torch.zeros(len(batch_protein), 7).to(protein_pos.device)
@@ -704,7 +662,6 @@ class ScorePosNet3D(nn.Module):
                         batch_raw_ligand=None,
                         time_step=t
                     )
-                # Note: init_ligand_pos and init_ligand_v should not be confused
                 preds = {
                     'pred_ligand_pos': preds_uncond['pred_ligand_pos'] + guidance_scale_pos * (
                         preds_cond['pred_ligand_pos'] - preds_uncond['pred_ligand_pos']),
@@ -712,7 +669,6 @@ class ScorePosNet3D(nn.Module):
                         preds_cond['pred_ligand_v'] - preds_uncond['pred_ligand_v'])
                 }
 
-            # Compute posterior mean and variance
             if self.model_mean_type == 'noise':
                 pred_pos_noise = preds['pred_ligand_pos'] - ligand_pos_sampled
                 pos0_from_e = self._predict_x0_from_eps(xt=ligand_pos_sampled, eps=pred_pos_noise, t=t, batch=batch_ligand)
@@ -759,5 +715,3 @@ class ScorePosNet3D(nn.Module):
 def extract(coef, t, batch):
     out = coef[t][batch]
     return out.unsqueeze(-1)
-
-# %%

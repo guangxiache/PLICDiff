@@ -6,7 +6,10 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Crippen, Lipinski
 from rdkit.Chem.QED import qed
 
-from utils.evaluation.sascorer import calculateScore, compute_sa_score
+from utils.evaluation.sascorer import calculateScore, compute_sa_score as compute_sa_score
+
+__all__ = ['obey_lipinski', 'get_logp', 'get_chem', 'get_molecule_force_field',
+           'calculateScore', 'compute_sa_score']
 
 
 def obey_lipinski(mol):
@@ -34,8 +37,6 @@ def get_chem(mol):
     lipinski_score = obey_lipinski(mol)
     ring_info = mol.GetRingInfo()
     ring_size = Counter([len(r) for r in ring_info.AtomRings()])
-    # hacc_score = Lipinski.NumHAcceptors(mol)
-    # hdon_score = Lipinski.NumHDonors(mol)
 
     return {
         'qed': qed_score,
@@ -48,26 +49,16 @@ def get_chem(mol):
 
 
 def get_molecule_force_field(mol, conf_id=None, force_field='mmff', **kwargs):
-    """
-    Get a force field for a molecule.
-    Parameters
-    ----------
-    mol : RDKit Mol
-        Molecule.
-    conf_id : int, optional
-        ID of the conformer to associate with the force field.
-    force_field : str, optional
-        Force Field name.
-    kwargs : dict, optional
-        Keyword arguments for force field constructor.
-    """
+    """Build UFF or MMFF94/MMFF94s for the selected conformer."""
+    conf_id = -1 if conf_id is None else conf_id
+    force_field = force_field.lower()
     if force_field == 'uff':
         ff = AllChem.UFFGetMoleculeForceField(
             mol, confId=conf_id, **kwargs)
-    elif force_field.startswith('mmff'):
+    elif force_field in {'mmff', 'mmff94', 'mmff94s'}:
         AllChem.MMFFSanitizeMolecule(mol)
         mmff_props = AllChem.MMFFGetMoleculeProperties(
-            mol, mmffVariant=force_field)
+            mol, mmffVariant='MMFF94s' if force_field == 'mmff94s' else 'MMFF94')
         ff = AllChem.MMFFGetMoleculeForceField(
             mol, mmff_props, confId=conf_id, **kwargs)
     else:

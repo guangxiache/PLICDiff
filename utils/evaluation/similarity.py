@@ -26,10 +26,7 @@ def tanimoto_sim(mol, ref, kind='rdk', **kwargs):
 
 def pairwise_diversity(molecules, kind='morgan', radius=2, n_bits=2048,
                        use_chirality=False):
-    """Mean (1 - Tanimoto) over all unordered pairs, retaining duplicate samples.
-
-    No pairs exist for zero or one molecule, so the result is None, not zero.
-    """
+    """Mean (1 - Tanimoto) over unordered sample pairs; None for fewer than two."""
     fps = [fingerprint(mol, kind=kind, radius=radius, n_bits=n_bits,
                        use_chirality=use_chirality) for mol in molecules]
     n_pairs = len(fps) * (len(fps) - 1) // 2

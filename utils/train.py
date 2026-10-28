@@ -1,14 +1,11 @@
-import copy
 import warnings
 
 import numpy as np
 import torch
-from torch_geometric.data import Data, Batch
 
 from utils.warmup import GradualWarmupScheduler
 
 
-# customize exp lr scheduler with min lr
 class ExponentialLR_with_minLr(torch.optim.lr_scheduler.ExponentialLR):
     def __init__(self, optimizer, gamma, min_lr=1e-4, last_epoch=-1, verbose=False):
         self.gamma = gamma
@@ -43,7 +40,7 @@ def get_optimizer(cfg, model):
     if cfg.type == 'adam':
         return torch.optim.Adam(
             model.parameters(),
-            lr=cfg.lr,  
+            lr=cfg.lr,
             weight_decay=cfg.weight_decay,
             betas=(cfg.beta1, cfg.beta2,)
         )

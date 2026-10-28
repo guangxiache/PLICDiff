@@ -53,21 +53,19 @@ if __name__ == '__main__':
     parser.add_argument('--tag', type=str, default='')
     parser.add_argument('--train_report_iter', type=int, default=200)
     parser.add_argument('--resume_train_diffusion', action='store_true', help='Whether to resume train model')
-    parser.add_argument('--load_model_path', type=str) 
+    parser.add_argument('--load_model_path', type=str)
     args = parser.parse_args()
     args.device = validate_device(args.device)
     args.config = project_path(args.config)
     if args.resume_train_diffusion and not args.load_model_path:
         parser.error('--resume_train_diffusion requires --load_model_path')
 
-    # Load config
     config = misc.load_config(args.config)
     config_name = os.path.basename(args.config)[:os.path.basename(args.config).rfind('.')]
     misc.seed_all(config.train.seed)
 
-    # Logging
     custom_name = 'test'
-    log_dir = misc.get_new_log_dir(args.logdir, prefix=config_name, tag=args.tag, custom_name=custom_name) 
+    log_dir = misc.get_new_log_dir(args.logdir, prefix=config_name, tag=args.tag, custom_name=custom_name)
     ckpt_dir = os.path.join(log_dir, 'checkpoints')
     os.makedirs(ckpt_dir, exist_ok=True)
     vis_dir = os.path.join(log_dir, 'vis')
@@ -83,7 +81,6 @@ if __name__ == '__main__':
         shutil.copy2(ROOT_DIR / 'models' / source, model_source_dir / source)
     shutil.copy2(ROOT_DIR / 'scripts' / 'PlicEncoder.py', Path(log_dir) / 'PlicEncoder.py')
 
-    # Transformations
     protein_featurizer = trans.FeaturizeProteinAtom()
     ligand_featurizer = trans.FeaturizeLigandAtom(config.data.transform.ligand_atom_mode)
     transform_list = [
@@ -95,7 +92,6 @@ if __name__ == '__main__':
         transform_list.append(trans.RandomRotation())
     transform = Compose(transform_list)
 
-    # Dataset and DataLoader
     logger.info('Loading dataset...')
     dataset, subsets = get_dataset(
         config=config.data,
@@ -120,7 +116,6 @@ if __name__ == '__main__':
     val_loader = DataLoader(val_set, config.train.batch_size, shuffle=False,
                             follow_batch=FOLLOW_BATCH, exclude_keys=collate_exclude_keys)
 
-    # Model construction
     logger.info('Building model...')
     model = ScorePosNet3D(
         config.model,
@@ -130,7 +125,6 @@ if __name__ == '__main__':
     print(f'protein feature dim: {protein_featurizer.feature_dim} ligand feature dim: {ligand_featurizer.feature_dim}')
     logger.info(f'# trainable parameters: {misc.count_parameters(model) / 1e6:.4f} M')
 
-    # Optimizer and scheduler
     optimizer = utils_train.get_optimizer(config.train.optimizer, model)
     scheduler = utils_train.get_scheduler(config.train.scheduler, optimizer)
 
@@ -138,6 +132,7 @@ if __name__ == '__main__':
     def train(it):
         model.train()
         optimizer.zero_grad()
+        mean_losses = {key: 0. for key in ('loss', 'loss_pos', 'loss_v')}
         for _ in range(config.train.n_acc_batch):
             batch = next(train_iterator).to(args.device)
 
@@ -147,7 +142,6 @@ if __name__ == '__main__':
             pli = (pli if torch.is_tensor(pli) else
                    torch.cat([torch.as_tensor(arr) for arr in pli], dim=0))
             pli = pli.to(device=batch.protein_pos.device, dtype=torch.float32)
-            # Set cfg
             drop_condition_prob = 0.3
             mask = torch.rand(batch_size, 1) > drop_condition_prob
             graph_sizes = torch.bincount(batch_protein).cpu()
@@ -155,7 +149,6 @@ if __name__ == '__main__':
             pli = pli * mask.float()
             pli[:, -1] = torch.where(mask.squeeze(-1), pli[:, -1], torch.tensor(1.0, device=pli.device))
 
-            # Add noise to protein positions
             protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
             gt_protein_pos = batch.protein_pos + protein_noise
             results = model.get_diffusion_loss(
@@ -168,9 +161,10 @@ if __name__ == '__main__':
                 ligand_v=batch.ligand_atom_feature_full,
                 batch_ligand=batch.ligand_element_batch
             )
-            loss, loss_pos, loss_v = results['loss'], results['loss_pos'], results['loss_v']
-            loss = loss / config.train.n_acc_batch
+            loss = results['loss'] / config.train.n_acc_batch
             loss.backward()
+            for key in mean_losses:
+                mean_losses[key] += results[key].detach() / config.train.n_acc_batch
         orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
         optimizer.step()
 
@@ -182,12 +176,13 @@ if __name__ == '__main__':
         if it % args.train_report_iter == 0:
             logger.info(
                 '[Train] Iter %d | Loss %.6f (pos %.6f | v %.6f) | Lr: %.6f | Grad Norm: %.6f' % (
-                    it, loss, loss_pos, loss_v, optimizer.param_groups[0]['lr'], orig_grad_norm
+                    it, mean_losses['loss'], mean_losses['loss_pos'], mean_losses['loss_v'],
+                    optimizer.param_groups[0]['lr'], orig_grad_norm
                 )
             )
             for k, v in results.items():
                 if torch.is_tensor(v) and v.squeeze().ndim == 0:
-                    writer.add_scalar(f'train/{k}', v, it)
+                    writer.add_scalar(f'train/{k}', mean_losses.get(k, v), it)
             writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], it)
             writer.add_scalar('train/grad', orig_grad_norm, it)
             writer.flush()
@@ -195,9 +190,7 @@ if __name__ == '__main__':
 
     def validate(it):
         sum_loss, sum_loss_pos, sum_loss_v, sum_n = 0, 0, 0, 0
-        sum_loss_bond, sum_loss_non_bond = 0, 0
         all_pred_v, all_true_v = [], []
-        all_pred_bond_type, all_gt_bond_type = [], []
         with torch.no_grad():
             model.eval()
             for batch in tqdm(val_loader, desc='Validate'):
@@ -209,7 +202,6 @@ if __name__ == '__main__':
                 pli = (pli if torch.is_tensor(pli) else
                        torch.cat([torch.as_tensor(arr) for arr in pli], dim=0))
                 pli = pli.to(device=batch.protein_pos.device, dtype=torch.float32)
-                # Set cfg
                 drop_condition_prob = 0.3
                 mask = torch.rand(batch_size, 1) > drop_condition_prob
                 graph_sizes = torch.bincount(batch_protein).cpu()
@@ -217,7 +209,6 @@ if __name__ == '__main__':
                 pli = pli * mask.float()
                 pli[:, -1] = torch.where(mask.squeeze(-1), pli[:, -1], torch.tensor(1.0, device=pli.device))
 
-                t_loss, t_loss_pos, t_loss_v = [], [], []
                 for t in np.linspace(0, model.num_timesteps - 1, 10).astype(int):
                     time_step = torch.tensor([t] * batch_size).to(args.device)
                     results = model.get_diffusion_loss(
@@ -233,7 +224,6 @@ if __name__ == '__main__':
                     )
                     loss, loss_pos, loss_v = results['loss'], results['loss_pos'], results['loss_v']
 
-                    # Accumulate losses
                     sum_loss += float(loss) * batch_size
                     sum_loss_pos += float(loss_pos) * batch_size
                     sum_loss_v += float(loss_v) * batch_size
@@ -241,15 +231,12 @@ if __name__ == '__main__':
                     all_pred_v.append(results['ligand_v_recon'].detach().cpu().numpy())
                     all_true_v.append(batch.ligand_atom_feature_full.detach().cpu().numpy())
 
-        # Calculate average losses
         avg_loss = sum_loss / sum_n
         avg_loss_pos = sum_loss_pos / sum_n
         avg_loss_v = sum_loss_v / sum_n
-        # Calculate AUROC
         atom_auroc = get_auroc(np.concatenate(all_true_v), np.concatenate(all_pred_v, axis=0),
                                feat_mode=config.data.transform.ligand_atom_mode)
 
-        # Update learning rate
         if config.train.scheduler.type == 'plateau':
             scheduler.step(avg_loss)
         elif config.train.scheduler.type == 'warmup_plateau':
@@ -257,13 +244,11 @@ if __name__ == '__main__':
         else:
             scheduler.step()
 
-        # Log validation results
         logger.info(
             '[Validate] Iter %05d | Loss %.6f | Loss pos %.6f | Loss v %.6f e-3 | Avg atom auroc %.6f' % (
                 it, avg_loss, avg_loss_pos, avg_loss_v * 1000, atom_auroc
             )
         )
-        # Log losses to TensorBoard
         writer.add_scalar('val/loss', avg_loss, it)
         writer.add_scalar('val/loss_pos', avg_loss_pos, it)
         writer.add_scalar('val/loss_v', avg_loss_v, it)
@@ -272,69 +257,46 @@ if __name__ == '__main__':
 
 
     try:
+        best_loss, best_iter = None, None
         if args.resume_train_diffusion:
-                checkpoint = load_checkpoint(args.load_model_path, args.device)
-                model.load_state_dict(checkpoint['model'])
-                optimizer.load_state_dict(checkpoint['optimizer'])
-                scheduler.load_state_dict(checkpoint['scheduler'])
-                current_iter = checkpoint['iteration'] + 1
+            checkpoint = load_checkpoint(args.load_model_path, args.device)
+            model.load_state_dict(checkpoint['model'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scheduler.load_state_dict(checkpoint['scheduler'])
+            current_iter = checkpoint['iteration'] + 1
+            best_loss, best_iter = checkpoint.get('best_loss'), checkpoint.get('best_iter')
         else:
             current_iter = 1
 
-        best_loss, best_iter = None, None
         for it in range(current_iter, config.train.max_iters + 1):
             train(it)
             if it <= 0.6*config.train.max_iters:
-                if it % config.train.val_freq == 0 or it==1 or it==200:
-                    val_loss = validate(it)
-                    if best_loss is None or val_loss < best_loss:
-                        logger.info(f'[Validate] Best val loss achieved: {val_loss:.6f}')
-                        best_loss, best_iter = val_loss, it
-                        ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
-                        torch.save({
-                            'config': config,
-                            'model': model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'scheduler': scheduler.state_dict(),
-                            'iteration': it,
-                        }, ckpt_path)
-                    else:
-                        logger.info(f'[Validate] Val loss is not improved. '
-                                    f'Best val loss: {best_loss:.6f} at iter {best_iter}')
-            elif it > 0.6*config.train.max_iters and it <= 0.9*config.train.max_iters:
-                if it % 1000 == 0:
-                    val_loss = validate(it)
-                    if best_loss is None or val_loss < best_loss:
-                        logger.info(f'[Validate] Best val loss achieved: {val_loss:.6f}')
-                        best_loss, best_iter = val_loss, it
-                        ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
-                        torch.save({
-                            'config': config,
-                            'model': model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'scheduler': scheduler.state_dict(),
-                            'iteration': it,
-                        }, ckpt_path)
-                    else:
-                        logger.info(f'[Validate] Val loss is not improved. '
-                                    f'Best val loss: {best_loss:.6f} at iter {best_iter}')
+                validate_now = it % config.train.val_freq == 0 or it in (1, 200)
+            elif it <= 0.9*config.train.max_iters:
+                validate_now = it % 1000 == 0
             else:
-                if it % 200 == 0 or it == config.train.max_iters:
-                    val_loss = validate(it)
-                    if best_loss is None or val_loss < best_loss:
-                        logger.info(f'[Validate] Best val loss achieved: {val_loss:.6f}')
-                        best_loss, best_iter = val_loss, it
-                        ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
-                        torch.save({
-                            'config': config,
-                            'model': model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'scheduler': scheduler.state_dict(),
-                            'iteration': it,
-                        }, ckpt_path)
-                    else:
-                        logger.info(f'[Validate] Val loss is not improved. '
-                                    f'Best val loss: {best_loss:.6f} at iter {best_iter}')
+                validate_now = it % 200 == 0 or it == config.train.max_iters
+            if not validate_now:
+                continue
+            val_loss = validate(it)
+            if best_loss is None or val_loss < best_loss:
+                logger.info(f'[Validate] Best val loss achieved: {val_loss:.6f}')
+                best_loss, best_iter = val_loss, it
+                ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
+                torch.save({
+                    'config': config,
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'iteration': it,
+                    'best_loss': best_loss,
+                    'best_iter': best_iter,
+                }, ckpt_path)
+            else:
+                logger.info(f'[Validate] Val loss is not improved. '
+                            f'Best val loss: {best_loss:.6f} at iter {best_iter}')
 
     except KeyboardInterrupt:
         logger.info('Terminating...')
+    finally:
+        writer.close()

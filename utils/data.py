@@ -35,6 +35,7 @@ class PDBProtein(object):
 
     def __init__(self, data, mode='auto'):
         super().__init__()
+        data = os.fspath(data)
         if (data[-4:].lower() == '.pdb' and mode == 'auto') or mode == 'path':
             with open(data, 'r') as f:
                 self.block = f.read()
@@ -43,9 +44,7 @@ class PDBProtein(object):
 
         self.ptable = Chem.GetPeriodicTable()
 
-        # Molecule properties
         self.title = None
-        # Atom properties
         self.atoms = []
         self.element = []
         self.atomic_weight = []
@@ -53,7 +52,6 @@ class PDBProtein(object):
         self.atom_name = []
         self.is_backbone = []
         self.atom_to_aa_type = []
-        # Residue properties
         self.residues = []
         self.amino_acid = []
         self.center_of_mass = []
@@ -99,7 +97,6 @@ class PDBProtein(object):
                 break  # Some PDBs have more than 1 model.
 
     def _parse(self):
-        # Process atoms
         residues_tmp = {}
         for atom in self._enum_formatted_atom_lines():
             if atom['type'] == 'HEADER':
@@ -128,7 +125,6 @@ class PDBProtein(object):
                 assert residues_tmp[chain_res_id]['chain'] == atom['chain']
                 residues_tmp[chain_res_id]['atoms'].append(next_ptr)
 
-        # Process residues
         self.residues = [r for _, r in residues_tmp.items()]
         for residue in self.residues:
             sum_pos = np.zeros([3], dtype=np.float32)
@@ -140,7 +136,6 @@ class PDBProtein(object):
                     residue['pos_%s' % self.atom_name[atom_idx]] = self.pos[atom_idx]
             residue['center_of_mass'] = sum_pos / sum_mass
 
-        # Process backbone atoms of residues
         for residue in self.residues:
             self.amino_acid.append(self.AA_NAME_NUMBER[residue['name']])
             self.center_of_mass.append(residue['center_of_mass'])
@@ -165,7 +160,6 @@ class PDBProtein(object):
     def query_residues_ligand(self, ligand, radius, criterion='center_of_mass'):
         selected = []
         sel_idx = set()
-        # The time-complexity is O(mn).
         for center in ligand['pos']:
             for i, residue in enumerate(self.residues):
                 distance = np.linalg.norm(residue[criterion] - center, ord=2)
@@ -195,26 +189,23 @@ def parse_pdbbind_index_file(path):
 
 
 def parse_sdf_file(path):
+    path = os.fspath(path)
     fdefName = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
     factory = ChemicalFeatures.BuildFeatureFactory(fdefName)
-    # read mol
-    if path.endswith('.sdf'):
+    if path.lower().endswith('.sdf'):
         rdmol = Chem.MolFromMolFile(path, sanitize=False)
-    elif path.endswith('.mol2'):
+    elif path.lower().endswith('.mol2'):
         rdmol = Chem.MolFromMol2File(path, sanitize=False)
     else:
         raise ValueError
     Chem.SanitizeMol(rdmol)
     rdmol = Chem.RemoveHs(rdmol)
 
-    # Remove Hydrogens.
-    # rdmol = next(iter(Chem.SDMolSupplier(path, removeHs=True)))
     rd_num_atoms = rdmol.GetNumAtoms()
     feat_mat = np.zeros([rd_num_atoms, len(ATOM_FAMILIES)], dtype=np.compat.long)
     for feat in factory.GetFeaturesForMol(rdmol):
         feat_mat[feat.GetAtomIds(), ATOM_FAMILIES_ID[feat.GetFamily()]] = 1
 
-    # Get hybridization in the order of atom idx.
     hybridization = []
     for atom in rdmol.GetAtoms():
         hybr = str(atom.GetHybridization())
@@ -239,7 +230,6 @@ def parse_sdf_file(path):
     center_of_mass = accum_pos / accum_mass
     element = np.array(element, dtype=int)
 
-    # in edge_type, we have 1 for single bond, 2 for double bond, 3 for triple bond, and 4 for aromatic bond.
     row, col, edge_type = [], [], []
     for bond in rdmol.GetBonds():
         start = bond.GetBeginAtomIdx()

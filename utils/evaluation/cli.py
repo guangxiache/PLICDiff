@@ -48,7 +48,7 @@ class DockingRunner:
             with TemporaryDirectory(prefix='plicdiff_qvina_') as directory:
                 task = QVinaDockingTask.from_generated_mol(
                     mol, ligand_filename, protein_root=self.protein, tmp_dir=directory)
-                return {'qvina': task.run_sync()}
+                return {'qvina': task.run_sync(exhaustiveness=self.exhaustiveness, cpu=self.cpu)}
         from utils.evaluation.docking_vina import VinaDockingTask
 
         with TemporaryDirectory(prefix='plicdiff_vina_') as directory:

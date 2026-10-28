@@ -20,11 +20,11 @@ from utils.runtime import parse_bool
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--dataset', type=str, default='./data/crossdocked_v1.1_rmsd1.0_pocket10')
+    parser.add_argument('-d', '--dataset', type=str, default='./data/crossdocked_v1.3_rmsd1.0_pocket10')
     parser.add_argument('-s', '--split', type=str, default='./data/crossdocked_pocket10_pose_split.pt')
     parser.add_argument('-o', '--out', type=str, default=None)
-    parser.add_argument('--protein_root', type=str, default='./data/crossdocked_v1.1_rmsd1.0')
-    parser.add_argument('--ligand_root', type=str, default='./data/crossdocked_v1.1_rmsd1.0_pocket10')
+    parser.add_argument('--protein_root', type=str, default='./data/crossdocked_v1.3_rmsd1.0')
+    parser.add_argument('--ligand_root', type=str, default='./data/crossdocked_v1.3_rmsd1.0_pocket10')
     parser.add_argument('--use_uff', type=parse_bool, default=True)
     parser.add_argument('--size_factor', type=float, default=1.2)
     args = parser.parse_args()
@@ -32,7 +32,6 @@ if __name__ == '__main__':
     logger = misc.get_logger('docking')
     logger.info(args)
 
-    # Load dataset
     dataset, subsets = get_dataset(
         config=EasyDict({
             'name': 'pl',
@@ -43,12 +42,10 @@ if __name__ == '__main__':
     train_set, test_set = subsets['train'], subsets['test']
     logger.info(f'Successfully load the dataset (size: {len(test_set)})!')
 
-    # Dock
     logger.info('Start docking...')
     results = []
     for i, data in enumerate(tqdm(test_set)):
         mol = next(iter(Chem.SDMolSupplier(os.path.join(args.ligand_root, data.ligand_filename))))
-        # try:
         chem_results = scoring_func.get_chem(mol)
         vina_task = QVinaDockingTask.from_original_data(
             data,
@@ -58,9 +55,6 @@ if __name__ == '__main__':
             size_factor=args.size_factor
         )
         vina_results = vina_task.run_sync()
-        # except:
-        #     logger.warning('Error #%d' % i)
-        #     continue
 
         results.append({
             'mol': mol,
@@ -70,7 +64,6 @@ if __name__ == '__main__':
             'vina': vina_results
         })
 
-    # Save
     if args.out is None:
         split_name = os.path.basename(args.split)
         split_name = split_name[:split_name.rfind('.')]

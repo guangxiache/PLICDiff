@@ -82,8 +82,6 @@ def check_stability(positions, atom_type, debug=False, hs=False, return_nr_bonds
             atom1, atom2 = atom_decoder[atom_type[i]], atom_decoder[
                 atom_type[j]]
             order = get_bond_order(atom1, atom2, dist)
-            # if i == 0:
-            #     print(j, order)
             nr_bonds[i] += order
             nr_bonds[j] += order
 

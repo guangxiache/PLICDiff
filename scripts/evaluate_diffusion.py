@@ -26,7 +26,7 @@ def extract_idx_from_path(path):
 
 
 def sample_arrays(result, eval_step):
-    """Accept stored trajectories or final-only sampling outputs without silent truncation."""
+    """Read paired coordinates and atom types from trajectories or final predictions."""
     pos = result.get('pred_ligand_pos_traj')
     types = result.get('pred_ligand_v_traj')
     if pos is not None and len(pos):

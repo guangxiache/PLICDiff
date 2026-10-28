@@ -18,6 +18,8 @@ import torch
 from tqdm.auto import tqdm
 from utils.evaluation.pli import FixedPocketPLI, cosine_similarity
 
+__all__ = ['FixedPocketPLI', 'cosine_similarity', 'group_sdf_files_by_guidance_scale', 'main']
+
 
 def group_sdf_files_by_guidance_scale(ligand_dir):
     groups = defaultdict(list)
@@ -50,7 +52,6 @@ def main():
         scores, failures = {}, []
         for path in tqdm(paths, desc=f'PLI {group}'):
             try:
-                # Every ligand uses the same pocket and atom order. Never crop per generated ligand.
                 score = scorer.score_file(path)
                 if not math.isfinite(score):
                     raise ValueError('Nonfinite similarity')

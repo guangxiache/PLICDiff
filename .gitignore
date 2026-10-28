@@ -46,6 +46,8 @@ README copy.md
 # Local paper, analysis and release-preparation material
 /paper_revision_*/
 /code_release_review_*/
+/code_review_*/
+/data_release_review_*/
 /github_release_*/
 /文章图表数据/
 *.docx
