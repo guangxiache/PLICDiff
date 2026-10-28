@@ -58,17 +58,81 @@ PyTorch and its PyG extension wheels must match. See the official
 
 ## Data and checkpoints
 
-| Resource | Source / setup |
+The preprocessed PLI-conditioned dataset and pretrained checkpoints are shared in
+[Google Drive](https://drive.google.com/drive/folders/1sGeo79PXj7sLRuEs2fdutBS6k_yt7gar).
+
+| Resource | Download / setup |
 | --- | --- |
-| Training data | Obtain CrossDocked structures following the [TargetDiff data instructions](https://github.com/guanjq/targetdiff#data), then prepare them with this repository's scripts. |
-| Pretrained checkpoints | [Google Drive](https://drive.google.com/drive/folders/1sGeo79PXj7sLRuEs2fdutBS6k_yt7gar); default path: `checkpoint/9430000.pt`. |
-| Generation inputs | Your protein PDB and reference ligand SDF, or a prepared pocket PDB with its matching PLI profile. |
+| Preprocessed dataset, with PLI included | Download `crossdocked_v1.3_rmsd1.0_pocket10_processed_final.lmdb` from the shared Google Drive folder. The uncompressed file is about **9.34 GiB**. |
+| Matching train/validation/test split | Download `crossdocked_pocket10_pose_split.pt` from the same folder. |
+| Pretrained checkpoints | Available in the same folder; default location: `checkpoint/9430000.pt`. |
+| Generation inputs | Supply your own protein PDB and reference ligand SDF, or a prepared pocket PDB with its matching PLI profile. |
 
-Set `model.checkpoint` in [configs/sampling.yml](configs/sampling.yml), or pass
-`--checkpoint`. Checkpoints contain Python configuration objects; use a trusted source.
+**The LMDB and its matching split are the two files needed to load the released
+dataset for training and dataset-based sampling.** The LMDB already contains the
+protein/ligand coordinates, graph and chemical features, and precomputed PLI
+conditions in `pocket_interaction_condition`. Its seven channels are
+`pipi, anion, cation, hbd, hba, hydro, none`, aligned to the protein atoms.
+The loader reads these conditions directly, without rerunning PLIP for the cached
+complexes. Raw pocket/ligand files, `index.pkl` and split-generation caches are
+only needed for the corresponding preprocessing operations.
 
-The examples assume your own files are `inputs/protein.pdb` and `inputs/reference.sdf`.
-Data, pretrained weights and example structures are supplied separately.
+### Download and place the preprocessed data
+
+From the repository root, create the data directory:
+
+```bash
+mkdir -p ./data/crossdocked_v1.3_rmsd1.0_pocket10
+```
+
+Place the downloaded files as follows:
+
+```text
+PLICDiff/
+├── data/
+│   ├── crossdocked_v1.3_rmsd1.0_pocket10/  # may remain empty when using the LMDB
+│   ├── crossdocked_v1.3_rmsd1.0_pocket10_processed_final.lmdb
+│   └── crossdocked_pocket10_pose_split.pt
+└── checkpoint/
+    └── 9430000.pt                        # for generation with pretrained weights
+```
+
+If you downloaded the compressed `.lmdb.gz` version, decompress it before use.
+The compressed file is about **1.41 GiB**:
+
+```bash
+gzip -dk ./data/crossdocked_v1.3_rmsd1.0_pocket10_processed_final.lmdb.gz
+```
+
+Skip this command if you downloaded the uncompressed `.lmdb` file.
+The default [training configuration](configs/training.yml) already uses:
+
+```yaml
+data:
+  name: pl
+  path: ./data/crossdocked_v1.3_rmsd1.0_pocket10
+  split: ./data/crossdocked_pocket10_pose_split.pt
+```
+
+`data.path` names the pocket directory. The loader finds its sibling
+`crossdocked_v1.3_rmsd1.0_pocket10_processed_final.lmdb` automatically.
+Keep the supplied split paired with this LMDB and preserve the filenames.
+
+SHA-256 checksums of the **uncompressed LMDB** and split:
+
+```text
+af9f236f683a633519c69fe04e76a1055de9fbe4d36dd8726f2b2e99c7529cf7  crossdocked_v1.3_rmsd1.0_pocket10_processed_final.lmdb
+977ec123b51d8d9a03e2e007f50d1737103eaac06bc88fa4b81ee38d9dfae3d6  crossdocked_pocket10_pose_split.pt
+```
+
+For pretrained generation, set `model.checkpoint` in
+[configs/sampling.yml](configs/sampling.yml), or pass `--checkpoint`.
+Checkpoints contain Python configuration objects; use a trusted source.
+The generation examples assume your own files are `inputs/protein.pdb` and
+`inputs/reference.sdf`.
+
+To rebuild the dataset yourself, follow the [optional raw-data preprocessing
+instructions](#rebuild-from-raw-crossdocked-data-optional).
 
 ## Generate molecules
 
@@ -275,7 +339,36 @@ Keep preparation and scoring settings consistent across models.
 
 ## Training
 
-Prepare CrossDocked structures and a dataset split:
+### Use the released preprocessed dataset
+
+Follow [Download and place the preprocessed data](#download-and-place-the-preprocessed-data),
+then run:
+
+```bash
+python scripts/train.py --config configs/training.yml \
+  --device cuda --logdir ./logs_diffusion
+```
+
+The supplied LMDB and split support this workflow directly; you can skip the
+raw-data preprocessing steps below. To use different locations, update `data.path`
+and `data.split` in [configs/training.yml](configs/training.yml).
+Validation uses `val`; `test` is reserved for evaluation. The split must have
+nonempty `train` and `val` subsets. Use `--device cpu` for CPU execution.
+
+### Resume training
+
+Resume the model, optimizer and scheduler together:
+
+```bash
+python scripts/train.py --config configs/training.yml --device cuda \
+  --resume_train_diffusion \
+  --load_model_path ./logs_diffusion/RUN/checkpoints/ITERATION.pt
+```
+
+### Rebuild from raw CrossDocked data (optional)
+
+Obtain CrossDocked structures following the
+[TargetDiff data instructions](https://github.com/guanjq/targetdiff#data), then run:
 
 ```bash
 python scripts/data_preparation/clean_crossdocked.py \
@@ -291,27 +384,11 @@ python scripts/data_preparation/split_pl_dataset.py \
   --dest ./data/crossdocked_pocket10_pose_split.pt --num_cpu 4
 ```
 
-First access builds the LMDB and PLIP conditions. A TargetDiff LMDB without
-PLICDiff interaction features cannot be used directly; prepare the conditions
-from raw pocket/ligand pairs.
-
-Update `data.path`, `data.split` and training parameters in
-[configs/training.yml](configs/training.yml), then run:
-
-```bash
-python scripts/train.py --config configs/training.yml \
-  --device cuda --logdir ./logs_diffusion
-```
-
-The split must contain nonempty `train` and `val` subsets. Validation uses `val`;
-`test` is reserved for evaluation. Use `--device cpu` for CPU execution.
-To resume the model, optimizer and scheduler together:
-
-```bash
-python scripts/train.py --config configs/training.yml --device cuda \
-  --resume_train_diffusion \
-  --load_model_path ./logs_diffusion/RUN/checkpoints/ITERATION.pt
-```
+When the processed LMDB is absent, the dataset's first initialization builds it
+and computes the PLI conditions. The split script initializes the dataset, so
+this computation can occur while running that script. Use a separate data/output
+directory when building a new dataset or split. A TargetDiff LMDB without PLICDiff
+interaction features cannot be substituted for the supplied PLI-conditioned LMDB.
 
 ## Paths and repository layout
 
